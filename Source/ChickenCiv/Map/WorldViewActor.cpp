@@ -6,6 +6,19 @@
 #include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/World.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Animation/AnimSequence.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 AWorldViewActor::AWorldViewActor()
 {
@@ -229,6 +242,375 @@ namespace
 	}
 }
 
+// ===== Modele 3D =====
+namespace
+{
+	const TCHAR* TypeKey(EUnitType T)
+	{
+		switch (T)
+		{
+		case EUnitType::Settler: return TEXT("Settler");
+		case EUnitType::Worker: return TEXT("Worker");
+		case EUnitType::Warrior: return TEXT("Warrior");
+		case EUnitType::Archer: return TEXT("Archer");
+		case EUnitType::Scout: return TEXT("Scout");
+		case EUnitType::Commander: return TEXT("Commander");
+		case EUnitType::Medic: return TEXT("Medic");
+		case EUnitType::Resurrector: return TEXT("Resurrector");
+		case EUnitType::Deputy: return TEXT("Deputy");
+		case EUnitType::LaserGunslinger: return TEXT("LaserGunslinger");
+		case EUnitType::BlackHoleThrower: return TEXT("BlackHoleThrower");
+		case EUnitType::GreenGuardian: return TEXT("GreenGuardian");
+		default: return TEXT("");
+		}
+	}
+
+	const TCHAR* VehicleKey(EUnitType T)
+	{
+		switch (T)
+		{
+		case EUnitType::Ship: return TEXT("ship");
+		case EUnitType::SpaceShuttle: return TEXT("shuttle");
+		case EUnitType::XWing: return TEXT("xwing");
+		case EUnitType::TIE: return TEXT("tie");
+		default: return TEXT("");
+		}
+	}
+
+	FVector ReadVec(const TSharedPtr<FJsonObject>& O, const TCHAR* Field, const FVector& Def)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* A = nullptr;
+		if (O->TryGetArrayField(Field, A) && A->Num() >= 3) return FVector((*A)[0]->AsNumber(), (*A)[1]->AsNumber(), (*A)[2]->AsNumber());
+		return Def;
+	}
+
+	FPlace ReadPlace(const TSharedPtr<FJsonObject>& O)
+	{
+		FPlace P;
+		FString M, Mat;
+		O->TryGetStringField(TEXT("mesh"), M);
+		O->TryGetStringField(TEXT("mat"), Mat);
+		P.MeshKey = FName(*M);
+		P.Mat = FName(*Mat);
+		P.Loc = ReadVec(O, TEXT("loc"), FVector::ZeroVector);
+		const FVector R = ReadVec(O, TEXT("rot"), FVector::ZeroVector);
+		P.Rot = FRotator(R.X, R.Y, R.Z);
+		double V = 1.0;
+		O->TryGetNumberField(TEXT("scale"), V);
+		P.Scale = (float)V;
+		V = 0.0;
+		O->TryGetNumberField(TEXT("minPop"), V);
+		P.MinPop = (int32)V;
+		FString B;
+		if (O->TryGetStringField(TEXT("building"), B))
+		{
+			if (B == TEXT("SpaceStation")) P.Building = (int32)EBuildingType::SpaceStation;
+			else if (B == TEXT("ParticleAccelerator")) P.Building = (int32)EBuildingType::ParticleAccelerator;
+			else if (B == TEXT("Teleporter")) P.Building = (int32)EBuildingType::Teleporter;
+			else if (B == TEXT("DeathStar")) P.Building = (int32)EBuildingType::DeathStar;
+		}
+		return P;
+	}
+}
+
+UStaticMesh* AWorldViewActor::GetKitMesh(const FName& Key)
+{
+	if (TObjectPtr<UStaticMesh>* Found = KitMeshes.Find(Key)) return Found->Get();
+	const FString K = Key.ToString();
+	FString Name = K;
+	const int32 Slash = K.Find(TEXT("/"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+	if (Slash != INDEX_NONE) Name = K.Mid(Slash + 1);
+	UStaticMesh* SM = LoadObject<UStaticMesh>(nullptr, *FString::Printf(TEXT("/Game/Models/%s.%s"), *K, *Name));
+	KitMeshes.Add(Key, SM);
+	return SM;
+}
+
+UMaterialInterface* AWorldViewActor::MatFor(const FName& Mat) const
+{
+	if (Mat == FName(TEXT("Village"))) return KitVillageMat;
+	if (Mat == FName(TEXT("Castle"))) return KitCastleMat;
+	if (Mat == FName(TEXT("Station"))) return KitStationMat;
+	if (Mat == FName(TEXT("Hill"))) return KitHillMat;
+	return nullptr;
+}
+
+void AWorldViewActor::LoadKit()
+{
+	bKitTried = true;
+	KitChicken = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Models/Chicken_001.Chicken_001"));
+	KitIdle = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/Models/Chicken_001Chicken_001_idle.Chicken_001Chicken_001_idle"));
+	KitWalk = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/Models/Chicken_001Chicken_003_walk.Chicken_001Chicken_003_walk"));
+	KitTintMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Models/M_ChickenTint.M_ChickenTint"));
+	KitVillageMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Models/MI_Village.MI_Village"));
+	KitCastleMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Models/MI_Castle.MI_Castle"));
+	KitStationMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Models/MI_Station.MI_Station"));
+	KitHillMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Models/MI_Hill.MI_Hill"));
+	KitAirTex = LoadObject<UTexture>(nullptr, TEXT("/Game/Models/Air/T_SparrowWhite.T_SparrowWhite"));
+	bKitReady = KitChicken && KitIdle && KitWalk && KitTintMat;
+	const bool bNoModels = FParse::Param(FCommandLine::Get(), TEXT("NoModels"));
+	if (bNoModels) bKitReady = false;
+
+	// Ustawienia z Content/UI/models.json (edytowalne bez kompilacji).
+	FString Txt;
+	TSharedPtr<FJsonObject> Root;
+	if (!bNoModels && FFileHelper::LoadFileToString(Txt, *(FPaths::ProjectContentDir() / TEXT("UI/models.json"))) && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Txt), Root) && Root.IsValid())
+	{
+		double V = 0.0;
+		if (Root->TryGetNumberField(TEXT("chickenScale"), V)) ChickenScale = (float)V;
+		if (Root->TryGetNumberField(TEXT("chickenYaw"), V)) ChickenYaw = (float)V;
+		const TSharedPtr<FJsonObject>* Obj = nullptr;
+		if (Root->TryGetObjectField(TEXT("vehicles"), Obj))
+		{
+			for (const auto& Pair : (*Obj)->Values)
+			{
+				const TSharedPtr<FJsonObject>* O = nullptr;
+				if (Pair.Value->TryGetObject(O)) { VehSpec.Add(FName(*Pair.Key), ReadPlace(*O)); }
+			}
+		}
+		const TArray<TSharedPtr<FJsonValue>>* CityArr = nullptr;
+		if (Root->TryGetArrayField(TEXT("city"), CityArr))
+		{
+			for (const TSharedPtr<FJsonValue>& Item : *CityArr)
+			{
+				const TSharedPtr<FJsonObject>* O = nullptr;
+				if (Item->TryGetObject(O)) CitySpec.Add(ReadPlace(*O));
+			}
+		}
+		if (Root->TryGetObjectField(TEXT("decor"), Obj))
+		{
+			for (const auto& Pair : (*Obj)->Values)
+			{
+				const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+				if (!Pair.Value->TryGetArray(Items)) continue;
+				TArray<FDecorItem>& Out = DecorSpec.FindOrAdd(FName(*Pair.Key));
+				for (const TSharedPtr<FJsonValue>& It : *Items)
+				{
+					const TSharedPtr<FJsonObject>* IO = nullptr;
+					if (!It->TryGetObject(IO)) continue;
+					FDecorItem Item;
+					Item.At = ReadVec(*IO, TEXT("at"), FVector::ZeroVector);
+					const TArray<TSharedPtr<FJsonValue>>* Pcs = nullptr;
+					if ((*IO)->TryGetArrayField(TEXT("pieces"), Pcs))
+					{
+						for (const TSharedPtr<FJsonValue>& PV : *Pcs)
+						{
+							const TSharedPtr<FJsonObject>* PO = nullptr;
+							if (PV->TryGetObject(PO)) Item.Pieces.Add(ReadPlace(*PO));
+						}
+					}
+					Out.Add(Item);
+				}
+			}
+		}
+		if (Root->TryGetObjectField(TEXT("types"), Obj))
+		{
+			for (const auto& Pair : (*Obj)->Values)
+			{
+				const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+				if (!Pair.Value->TryGetArray(Arr)) continue;
+				TArray<FPropSpec>& Specs = PropTable.FindOrAdd(FName(*Pair.Key));
+				for (const TSharedPtr<FJsonValue>& Item : *Arr)
+				{
+					const TSharedPtr<FJsonObject>* O = nullptr;
+					if (!Item->TryGetObject(O)) continue;
+					FPropSpec S;
+					FString MeshName, Bone;
+					(*O)->TryGetStringField(TEXT("mesh"), MeshName);
+					(*O)->TryGetStringField(TEXT("bone"), Bone);
+					S.MeshKey = FName(*MeshName);
+					S.Bone = FName(*Bone);
+					S.Loc = ReadVec(*O, TEXT("loc"), FVector::ZeroVector);
+					const FVector Rv = ReadVec(*O, TEXT("rot"), FVector::ZeroVector);
+					S.Rot = FRotator(Rv.X, Rv.Y, Rv.Z); // pitch, yaw, roll
+					double Sc = 1.0;
+					(*O)->TryGetNumberField(TEXT("scale"), Sc);
+					S.Scale = (float)Sc;
+					Specs.Add(S);
+					if (!KitProps.Contains(S.MeshKey))
+					{
+						UStaticMesh* SM = LoadObject<UStaticMesh>(nullptr, *FString::Printf(TEXT("/Game/Models/Weapons/%s.%s"), *MeshName, *MeshName));
+						if (SM) KitProps.Add(S.MeshKey, SM);
+					}
+				}
+			}
+		}
+	}
+	UE_LOG(LogTemp, Display, TEXT("MODELS kit ready=%d vehicles=%d cityParts=%d props=%d"), bKitReady ? 1 : 0, VehSpec.Num(), CitySpec.Num(), KitProps.Num());
+}
+
+UInstancedStaticMeshComponent* AWorldViewActor::GetDecorISM(const FPlace& P)
+{
+	const FName Key(*(P.MeshKey.ToString() + TEXT("|") + P.Mat.ToString()));
+	if (TObjectPtr<UInstancedStaticMeshComponent>* F = DecorISM.Find(Key)) return F->Get();
+	UStaticMesh* SM = GetKitMesh(P.MeshKey);
+	if (!SM) return nullptr;
+	UInstancedStaticMeshComponent* C = NewObject<UInstancedStaticMeshComponent>(this);
+	C->SetStaticMesh(SM);
+	C->SetupAttachment(GetRootComponent());
+	C->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	C->SetCastShadow(false);
+	C->RegisterComponent();
+	if (UMaterialInterface* M = MatFor(P.Mat)) for (int32 k = 0; k < C->GetNumMaterials(); ++k) C->SetMaterial(k, M);
+	DecorISM.Add(Key, C);
+	return C;
+}
+
+void AWorldViewActor::RebuildDecor(const AChickenGameState& GS, const AHexMapActor& Map, const TArray<uint8>* Vis)
+{
+	for (auto& Pair : DecorISM) if (Pair.Value) Pair.Value->ClearInstances();
+	auto Place = [&](const FName& Key, const FHexCoord& Coord)
+	{
+		const TArray<FDecorItem>* Items = DecorSpec.Find(Key);
+		if (!Items) return;
+		const FVector Center = Map.TileCenter(Coord);
+		const float Yaw = (float)(((Coord.Q * 73856093) ^ (Coord.R * 19349663)) & 1023) * (360.f / 1024.f);
+		const FRotator YawRot(0.f, Yaw, 0.f);
+		for (const FDecorItem& Item : *Items)
+		{
+			for (const FPlace& P : Item.Pieces)
+			{
+				UInstancedStaticMeshComponent* ISM = GetDecorISM(P);
+				if (!ISM) continue;
+				const FVector Loc = Center + YawRot.RotateVector(Item.At + P.Loc);
+				ISM->AddInstance(FTransform(FRotator(P.Rot.Pitch, P.Rot.Yaw + Yaw, P.Rot.Roll), Loc, FVector(P.Scale)), true);
+			}
+		}
+	};
+	const FHexMap& Grid = GS.Grid;
+	for (int32 i = 0; i < Grid.Tiles.Num(); ++i)
+	{
+		const FMapTile& T = Grid.Tiles[i];
+		if (Vis && Vis->IsValidIndex(i) && (*Vis)[i] == 0) continue;
+		switch (T.Terrain)
+		{
+		case ETerrainType::Forest: Place(TEXT("Forest"), T.Coord); break;
+		case ETerrainType::Hills: Place(TEXT("Hills"), T.Coord); break;
+		case ETerrainType::Mountain: Place(TEXT("Mountain"), T.Coord); break;
+		default: break;
+		}
+	}
+	for (const FImprovement& I : GS.Civ.Improvements)
+	{
+		const int32 Idx = Grid.IndexOf(I.Pos);
+		if (Vis && Vis->IsValidIndex(Idx) && (*Vis)[Idx] == 0) continue;
+		if (I.Type == EImprovement::Farm) Place(TEXT("Farm"), I.Pos);
+	}
+}
+
+bool AWorldViewActor::UsesModel(EUnitType T) const
+{
+	if (VehicleKey(T)[0] != 0) return bKitReady && VehSpec.Contains(FName(VehicleKey(T)));
+	return bKitReady && TypeKey(T)[0] != 0;
+}
+
+void AWorldViewActor::UpdateVisual(const FUnit& U, const FVector& Pos, const FVector& MoveDir, bool bMoving, const FLinearColor& Col)
+{
+	const FPlace* Veh = VehSpec.Find(FName(VehicleKey(U.Type)));
+	FUnitVisual& V = Visuals.FindOrAdd(U.Id);
+	if (!V.Skel && !V.Stat)
+	{
+		if (Veh)
+		{
+			V.Stat = NewObject<UStaticMeshComponent>(this);
+			V.Stat->SetStaticMesh(GetKitMesh(Veh->MeshKey));
+			V.Stat->SetupAttachment(GetRootComponent());
+			V.Stat->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			V.Stat->RegisterComponent();
+			if (Veh->Mat == FName(TEXT("Tint")) && KitTintMat)
+			{
+				V.Mid = UMaterialInstanceDynamic::Create(KitTintMat, this);
+				if (KitAirTex) V.Mid->SetTextureParameterValue(TEXT("BaseTex"), KitAirTex);
+				for (int32 i = 0; i < V.Stat->GetNumMaterials(); ++i) V.Stat->SetMaterial(i, V.Mid);
+			}
+			else if (UMaterialInterface* M = MatFor(Veh->Mat)) for (int32 i = 0; i < V.Stat->GetNumMaterials(); ++i) V.Stat->SetMaterial(i, M);
+		}
+		else
+		{
+			V.Skel = NewObject<USkeletalMeshComponent>(this);
+			V.Skel->SetSkeletalMesh(KitChicken);
+			V.Skel->SetupAttachment(GetRootComponent());
+			V.Skel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			V.Skel->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+			V.Skel->RegisterComponent();
+			V.Mid = UMaterialInstanceDynamic::Create(KitTintMat, this);
+			V.Skel->SetMaterial(0, V.Mid);
+			if (const TArray<FPropSpec>* Specs = PropTable.Find(FName(TypeKey(U.Type))))
+			{
+				for (const FPropSpec& S : *Specs)
+				{
+					TObjectPtr<UStaticMesh>* Found = KitProps.Find(S.MeshKey);
+					if (!Found) continue;
+					UStaticMeshComponent* P = NewObject<UStaticMeshComponent>(this);
+					P->SetStaticMesh(Found->Get());
+					P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+					P->SetupAttachment(V.Skel, S.Bone);
+					P->SetRelativeLocationAndRotation(S.Loc, S.Rot);
+					P->SetRelativeScale3D(FVector(S.Scale));
+					P->RegisterComponent();
+					V.Props.Add(P);
+				}
+			}
+		}
+	}
+
+	if (bMoving && MoveDir.SizeSquared2D() > 1.0) V.Yaw = MoveDir.Rotation().Yaw;
+	if (V.Mid) V.Mid->SetVectorParameterValue(TEXT("Tint"), Col);
+	if (V.Skel)
+	{
+		V.Skel->SetWorldLocationAndRotation(Pos, FRotator(0.f, V.Yaw + ChickenYaw, 0.f));
+		V.Skel->SetWorldScale3D(FVector(ChickenScale * (U.Type == EUnitType::Scout ? 0.82f : (U.Type == EUnitType::Commander ? 1.18f : 1.f))));
+		const int32 W = bMoving ? 1 : 0;
+		if (V.Walking != W)
+		{
+			V.Walking = W;
+			V.Skel->PlayAnimation(W ? KitWalk.Get() : KitIdle.Get(), true);
+		}
+	}
+	else if (V.Stat && Veh)
+	{
+		V.Stat->SetWorldLocationAndRotation(Pos + Veh->Loc, FRotator(Veh->Rot.Pitch, V.Yaw + Veh->Rot.Yaw, Veh->Rot.Roll));
+		V.Stat->SetWorldScale3D(FVector(Veh->Scale));
+	}
+}
+
+void AWorldViewActor::UpdateCityVisual(const FCity& C, const FVector& Pos, const FLinearColor& Col)
+{
+	FCityVisual& CV = CityVis.FindOrAdd(C.Id);
+	// Sygnatura: ktore elementy sa aktywne przy tej wielkosci miasta.
+	int32 Sig = 0;
+	auto Active = [&](const FPlace& P) { return C.Population >= P.MinPop && (P.Building < 0 || C.Buildings.Contains((EBuildingType)P.Building)); };
+	for (int32 i = 0; i < CitySpec.Num(); ++i) if (Active(CitySpec[i])) Sig |= (1 << i);
+	if (CV.Sig != Sig)
+	{
+		for (UStaticMeshComponent* Comp : CV.Comps) if (Comp) Comp->DestroyComponent();
+		CV.Comps.Reset();
+		CV.Sig = Sig;
+		for (int32 i = 0; i < CitySpec.Num(); ++i)
+		{
+			if (!(Sig & (1 << i))) continue;
+			UStaticMesh* SM = GetKitMesh(CitySpec[i].MeshKey);
+			if (!SM) continue;
+			UStaticMeshComponent* Comp = NewObject<UStaticMeshComponent>(this);
+			Comp->SetStaticMesh(SM);
+			Comp->SetupAttachment(GetRootComponent());
+			Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Comp->RegisterComponent();
+			if (UMaterialInterface* M = MatFor(CitySpec[i].Mat)) for (int32 k = 0; k < Comp->GetNumMaterials(); ++k) Comp->SetMaterial(k, M);
+			CV.Comps.Add(Comp);
+		}
+	}
+	int32 Idx = 0;
+	for (int32 i = 0; i < CitySpec.Num(); ++i)
+	{
+		if (!(Sig & (1 << i))) continue;
+		if (!CV.Comps.IsValidIndex(Idx)) break;
+		UStaticMeshComponent* Comp = CV.Comps[Idx++];
+		if (!Comp) continue;
+		Comp->SetWorldLocationAndRotation(Pos + CitySpec[i].Loc, CitySpec[i].Rot);
+		Comp->SetWorldScale3D(FVector(CitySpec[i].Scale));
+	}
+}
+
 void AWorldViewActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -243,6 +625,7 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 	LastGS = &GS;
 	LastMap = &Map;
 	LastViewer = Viewer;
+	if (!bKitTried) LoadKit();
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	const float Dt = (float)FMath::Clamp(Now - LastSyncTime, 0.0, 0.05);
 	LastSyncTime = Now;
@@ -260,6 +643,15 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 	{
 		return GS.Players.IsValidIndex(PlayerIdx) ? CivColors::ForPlayer(GS.Players[PlayerIdx]) : CivColors::RaceColor(EChickenRace::Red);
 	};
+
+	// Dekoracje terenu (las, wzgorza, gory, farmy): przebudowa tylko przy zmianie widocznosci lub ulepszen.
+	if (bKitReady && DecorSpec.Num() > 0)
+	{
+		uint32 Sig = (uint32)GS.Civ.Improvements.Num() * 131u + (uint32)Grid.Tiles.Num();
+		for (int32 i = 0; i < Grid.Tiles.Num(); ++i) Sig = Sig * 31u + (uint32)((Vis && Vis->IsValidIndex(i)) ? (*Vis)[i] : 2);
+		for (const FImprovement& I : GS.Civ.Improvements) Sig = Sig * 17u + (uint32)(I.Pos.Q * 7 + I.Pos.R * 13 + (int32)I.Type);
+		if (Sig != DecorSig) { DecorSig = Sig; RebuildDecor(GS, Map, Vis); }
+	}
 
 	FMeshBuilder B;
 
@@ -293,10 +685,28 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 	}
 
 	// Miasta.
+	TSet<int32> CitiesSeen;
 	for (const FCity& C : GS.Civ.Cities)
 	{
 		if (VisAt(C.Pos) == 0) continue;
-		AddCityShape(B, Map.TileCenter(C.Pos) + FVector(0, 0, 2.f), OwnerColor(C.Owner), C.Population);
+		if (bKitReady && CitySpec.Num() > 0)
+		{
+			CitiesSeen.Add(C.Id);
+			const FVector CP = Map.TileCenter(C.Pos) + FVector(0, 0, 2.f);
+			B.AddCylinder(CP, 40.f, 4.f, Darker(OwnerColor(C.Owner), 0.35f), 12);                              // podstawa w kolorze gracza
+			B.AddBar(CP + FVector(30, 30, 0), CP + FVector(30, 30, 70), 1.2f, Dark);                           // maszt z flaga
+			B.AddBox(CP + FVector(30, 40, 62), FVector(1, 10, 6), OwnerColor(C.Owner));
+			UpdateCityVisual(C, CP, OwnerColor(C.Owner));
+			if (C.Buildings.Contains(EBuildingType::DeathStar))
+			{
+				const FVector DS = CP + FVector(0, 0, 175.f);                                           // Gwiazda Smierci nad miastem
+				B.AddSphere(DS, 40.f, FLinearColor(0.55f, 0.57f, 0.62f), 10, 16);
+				B.AddCylinder(DS - FVector(0, 0, 1.5f), 40.6f, 3.f, FLinearColor(0.12f, 0.13f, 0.16f), 24); // rownikowy rowek
+				B.AddSphere(DS + FVector(22, -18, 16), 11.f, FLinearColor(0.2f, 0.22f, 0.26f), 6, 10);      // czasza superlasera
+				B.AddSphere(DS + FVector(27, -22, 20), 3.f, FLinearColor(0.3f, 1.f, 0.3f), 3, 6);
+			}
+		}
+		else AddCityShape(B, Map.TileCenter(C.Pos) + FVector(0, 0, 2.f), OwnerColor(C.Owner), C.Population);
 	}
 
 	// Jednostki: swoje zawsze, cudze tylko na polach widocznych teraz; czlonkowie armii niewidoczni.
@@ -312,6 +722,8 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 		if (bInCity) P.Y += U.IsCivilian() ? -14.f : 14.f;
 		if (U.Def().Domain == EDomain::Sea) { P.X -= 24.f; P.Y -= 24.f; }
 		// Plynny ruch do docelowego pola (duze skoki, np. nowa gra, bez animacji).
+		const FVector Goal = P;
+		bool bUnitMoving = false;
 		{
 			Seen.Add(U.Id);
 			FVector& D = DrawPos.FindOrAdd(U.Id, P);
@@ -323,9 +735,11 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 				D = (Delta.Size() <= Step) ? P : D + Delta.GetSafeNormal() * Step;
 				bMoving = true;
 			}
+			bUnitMoving = !D.Equals(Goal, 0.5);
 			P = D;
 		}
-		AddUnitShape(B, U, P + FVector(0, 0, 4.f), OwnerColor(U.Owner));
+		if (UsesModel(U.Type)) UpdateVisual(U, P + FVector(0, 0, 4.f), Goal - P, bUnitMoving, OwnerColor(U.Owner));
+		else AddUnitShape(B, U, P + FVector(0, 0, 4.f), OwnerColor(U.Owner));
 		if (U.WorkTurns > 0) B.AddSphere(P + FVector(0, 0, 66.f), 4.f, Gold, 3, 6); // znacznik pracy
 		if (U.bCommander)
 		{
@@ -339,6 +753,28 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 	}
 
 	for (auto It = DrawPos.CreateIterator(); It; ++It) if (!Seen.Contains(It.Key())) It.RemoveCurrent();
+	for (auto It = CityVis.CreateIterator(); It; ++It)
+	{
+		if (CitiesSeen.Contains(It.Key())) continue;
+		for (UStaticMeshComponent* Comp : It.Value().Comps) if (Comp) Comp->DestroyComponent();
+		It.RemoveCurrent();
+	}
+	for (auto It = Visuals.CreateIterator(); It; ++It)
+	{
+		if (Seen.Contains(It.Key())) continue;
+		for (UStaticMeshComponent* P : It.Value().Props) if (P) P->DestroyComponent();
+		if (It.Value().Skel) It.Value().Skel->DestroyComponent();
+		if (It.Value().Stat) It.Value().Stat->DestroyComponent();
+		It.RemoveCurrent();
+	}
+	{
+		static int32 LogN = 0;
+		if (LogN++ < 3)
+		{
+			int32 NV = 0; for (const FMapTile& T : Grid.Tiles) if (VisAt(T.Coord) != 0) ++NV;
+			UE_LOG(LogTemp, Display, TEXT("SYNCDBG viewer=%d visibleTiles=%d tiles=%d units=%d seen=%d visuals=%d vis=%d"), Viewer, NV, Grid.Tiles.Num(), GS.Civ.Units.Num(), Seen.Num(), Visuals.Num(), Vis ? Vis->Num() : -1);
+		}
+	}
 	bAnimating = bMoving;
 	SetActorTickEnabled(bMoving);
 

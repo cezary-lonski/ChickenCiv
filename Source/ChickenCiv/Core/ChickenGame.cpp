@@ -1,4 +1,7 @@
 #include "Core/ChickenGame.h"
+#if !UE_BUILD_SHIPPING
+#include "ShaderCompiler.h"
+#endif
 #include "Core/ChickenCommand.h"
 #include "MediaPlayer.h"
 #include "ImageUtils.h"
@@ -149,6 +152,53 @@ void AChickenGame::BeginPlay()
 		}
 	}
 
+	// Narzedzie testowe: -DebugUnits rozstawia po jednej jednostce kazdego typu kurczaka (do strojenia modeli i broni).
+	if (FParse::Param(FCommandLine::Get(), TEXT("DebugUnits")) && !bClientProxy)
+	{
+		if (AChickenGameState* DGS = GetChickenState())
+		{
+			const FUnit* First = DGS->Civ.Units.FindByPredicate([](const FUnit& U) { return U.Owner == 0; });
+			if (First)
+			{
+				const EUnitType All[] = { EUnitType::Settler, EUnitType::Worker, EUnitType::Warrior, EUnitType::Archer, EUnitType::Scout, EUnitType::Commander,
+					EUnitType::Medic, EUnitType::Resurrector, EUnitType::Deputy, EUnitType::LaserGunslinger, EUnitType::BlackHoleThrower, EUnitType::GreenGuardian, EUnitType::Ship };
+				for (int32 i = 0; i < 13; ++i)
+				{
+					FHexCoord P = First->Pos;
+					for (int32 c = 0; c < (i % 6) + 1; ++c) P = P.Neighbor(0);
+					for (int32 r = 0; r < (i / 6) * 2 + 1; ++r) P = P.Neighbor(r % 2 ? 2 : 1);
+					CivRules::SpawnUnit(DGS->Civ, 0, All[i], P);
+				}
+				// teren testowy: pas lasu, wzgorz, gor i farm przed kurczakami
+				const ETerrainType Ter[] = { ETerrainType::Forest, ETerrainType::Hills, ETerrainType::Mountain, ETerrainType::Forest, ETerrainType::Hills, ETerrainType::Mountain };
+				for (int32 i = 0; i < 6; ++i)
+				{
+					FHexCoord P = First->Pos;
+					for (int32 s = 0; s < 3; ++s) P = P.Neighbor(0);
+					for (int32 s = 0; s < i; ++s) P = P.Neighbor(1);
+					const int32 Idx = DGS->Grid.IndexOf(P);
+					if (Idx != INDEX_NONE) DGS->Grid.Tiles[Idx].Terrain = Ter[i];
+					FHexCoord F2 = P;
+					for (int32 s = 0; s < 2; ++s) F2 = F2.Neighbor(0);
+					FImprovement Imp; Imp.Pos = F2; Imp.Type = EImprovement::Farm;
+					if (i % 2 == 0) DGS->Civ.Improvements.Add(Imp);
+				}
+				const int32 Pops[] = { 1, 4, 9 };
+				for (int32 k = 0; k < 3; ++k)
+				{
+					FCity C;
+					C.Id = 900 + k; C.Owner = 0; C.Name = TEXT("Test"); C.Population = Pops[k];
+					FHexCoord CP = First->Pos;
+					for (int32 s = 0; s < 2 * (k + 1); ++s) CP = CP.Neighbor(3);
+					C.Pos = CP;
+					DGS->Civ.Cities.Add(C);
+				}
+				CivRules::ComputeVisibility(DGS->Grid, DGS->Civ, 0);
+				RefreshViews();
+			}
+		}
+	}
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("AutoLan")))
 	{
 		int32 TargetTurns = 12;
@@ -175,9 +225,22 @@ void AChickenGame::BeginPlay()
 				if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) if (AStrategyPawn* Pawn = Cast<AStrategyPawn>(PC->GetPawn())) Pawn->ZoomBy(ZoomSteps);
 			}), FMath::Max(1.f, Delay - 3.f), false);
 		}
+		// -CamX / -CamY przesuwaja kamere (strojenie widoku modeli).
+		float CamX = 0.f, CamY = 0.f;
+		FParse::Value(FCommandLine::Get(), TEXT("-CamX="), CamX);
+		FParse::Value(FCommandLine::Get(), TEXT("-CamY="), CamY);
+		if (CamX != 0.f || CamY != 0.f)
+		{
+			FTimerHandle PanT;
+			GetWorldTimerManager().SetTimer(PanT, FTimerDelegate::CreateLambda([this, CamX, CamY]()
+			{
+				if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) if (APawn* Pawn = PC->GetPawn()) Pawn->AddActorWorldOffset(FVector(CamX, CamY, 0.f));
+			}), FMath::Max(1.f, Delay - 4.f), false);
+		}
 		FTimerHandle H;
 		GetWorldTimerManager().SetTimer(H, FTimerDelegate::CreateLambda([this, ShotPath]()
 		{
+			if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation(); // zrzut dopiero po skompilowaniu shaderow
 			if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
 			{
 				PC->ConsoleCommand(FString::Printf(TEXT("HighResShot 1280x720 filename=\"%s\""), *ShotPath));
