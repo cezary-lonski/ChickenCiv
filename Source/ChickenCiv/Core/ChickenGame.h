@@ -19,10 +19,10 @@ class UMediaSoundComponent;
 class UTexture;
 
 /** Wiersze menu glownego / pauzy. */
-enum class EMenuRow : uint8 { Resume, NewGame, MultiGame, Load, Save, Account, ApiKey, Quit, Size, Civs, Humans, Difficulty, Race, Color, Seed, Start, HotSeat, LanMenu, HostLan, JoinAddress, JoinLan, Back, Count };
+enum class EMenuRow : uint8 { Resume, NewGame, MultiGame, Load, Save, OpenSettings, OpenCredits, Account, ApiKey, Quit, Size, Civs, Humans, Difficulty, Race, Color, Seed, Start, HotSeat, LanMenu, HostLan, JoinAddress, JoinLan, Back, Count };
 
 /** Strony menu: glowne, tworzenie gry, wybor multiplayera, hot seat, LAN. */
-enum class EMenuPage : uint8 { Main, Setup, Multi, HotSeat, Lan };
+enum class EMenuPage : uint8 { Main, Setup, Multi, HotSeat, Lan, Settings, Credits };
 
 /** Ekran logowania (przed menu). */
 enum class ELoginRow : uint8 { Google, Microsoft, EmailLogin, EmailRegister, Guest, Count };
@@ -138,6 +138,8 @@ public:
 	// ---- Intro (film przed menu) ----
 	bool IsIntro() const { return bIntro; }
 	UTexture* GetIntroTexture() const;
+	/** Ilustracja tla menu glownego (Content/UI/MenuBg.jpg), wczytywana przy pierwszym uzyciu; moze byc nullptr. */
+	UTexture* GetMenuBgTexture();
 	void SkipIntro();
 	UFUNCTION() void OnIntroEnded();
 	UFUNCTION() void OnIntroFailed(FString FailedUrl);
@@ -235,6 +237,8 @@ private:
 	FTimerHandle IntroWatch;
 	UPROPERTY() TObjectPtr<UMediaPlayer> IntroPlayer;
 	UPROPERTY() TObjectPtr<UMediaTexture> IntroTexture;
+	UPROPERTY() TObjectPtr<UTexture2D> MenuBgTexture;
+	bool bMenuBgTried = false;
 	UPROPERTY() TObjectPtr<UMediaSoundComponent> IntroSound;
 
 	bool bHandoff = false; // miedzy turami dwoch graczy ludzkich: ekran zaslania mape

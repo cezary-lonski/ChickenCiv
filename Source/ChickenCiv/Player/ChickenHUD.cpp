@@ -117,6 +117,7 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 	const float H = (float)Canvas->SizeY;
 	const EMenuPage Page = GM->GetEffectiveMenuPage();
 	const bool bSetup = (Page == EMenuPage::Setup || Page == EMenuPage::HotSeat);
+	if (Page == EMenuPage::Main && !GM->IsNetworked()) { DrawMainMenu(GM); return; }
 
 	// Tlo: nieprzezroczysty gradient (mapa pod spodem nie przeswituje) + subtelna siatka heksow.
 	const float Alpha = Menu.bGameStarted ? 0.94f : 1.f;
@@ -161,6 +162,8 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 	case EMenuPage::Multi: Sub = TEXT("N O W A   G R A   M U L T I P L A Y E R"); break;
 	case EMenuPage::HotSeat: Sub = TEXT("G R A   H O T   S E A T"); break;
 	case EMenuPage::Lan: Sub = TEXT("G R A   L A N"); break;
+	case EMenuPage::Settings: Sub = TEXT("U S T A W I E N I A"); break;
+	case EMenuPage::Credits: Sub = TEXT("A U T O R Z Y"); break;
 	default: break;
 	}
 	if (GM->IsNetServer()) Sub = TEXT("P O C Z E K A L N I A   L A N");
@@ -182,12 +185,22 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 	int32 NumRows = 0;
 	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i) if (GM->IsMenuRowVisible((EMenuRow)i)) ++NumRows;
 	const float PanelTop = 160.f;
-	const float PanelH = NumRows * Step + 36.f;
+	const float Extra = (Page == EMenuPage::Credits) ? 150.f : 0.f;
+	const float PanelH = NumRows * Step + 36.f + Extra;
 	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.35f), (W - PanelW) * 0.5f + 6.f, PanelTop + 6.f, PanelW, PanelH); // cien
 	DrawRect(FLinearColor(0.025f, 0.032f, 0.065f, 0.97f), (W - PanelW) * 0.5f, PanelTop, PanelW, PanelH);
 	DrawRect(FLinearColor(1.f, 0.8f, 0.24f, 1.f), (W - PanelW) * 0.5f, PanelTop, PanelW, 3.f);
 
-	float Y = PanelTop + 20.f;
+	if (Page == EMenuPage::Credits)
+	{
+		static const TCHAR* Lines[] = { TEXT("CHICKEN CIV"), TEXT("Chicken Studio"), TEXT("Silnik: Unreal Engine 5"), TEXT("Kod gry napisany z pomocą Claude (Anthropic)"), TEXT("Strategia turowa na heksach z kurczakową cywilizacją") };
+		for (int32 k = 0; k < 5; ++k)
+		{
+			Canvas->SetDrawColor(k == 0 ? FColor(255, 205, 60) : FColor(205, 210, 225));
+			Canvas->DrawText(Font, Lines[k], X0, PanelTop + 24.f + k * 26.f, k == 0 ? 1.3f : 1.05f, k == 0 ? 1.3f : 1.05f);
+		}
+	}
+	float Y = PanelTop + 20.f + Extra;
 	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i)
 	{
 		const EMenuRow Row = (EMenuRow)i;
@@ -201,7 +214,9 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 		case EMenuRow::Resume: Label = TEXT("Wznów grę"); bButton = true; break;
 		case EMenuRow::NewGame: Label = TEXT("Nowa gra"); bButton = true; break;
 		case EMenuRow::MultiGame: Label = TEXT("Nowa gra multiplayer"); bButton = true; break;
-		case EMenuRow::Load: Label = TEXT("Wczytaj grę"); bButton = true; break;
+		case EMenuRow::Load: Label = TEXT("Kontynuuj"); bButton = true; break;
+		case EMenuRow::OpenSettings: Label = TEXT("Ustawienia"); bButton = true; break;
+		case EMenuRow::OpenCredits: Label = TEXT("Autorzy"); bButton = true; break;
 		case EMenuRow::Save: Label = TEXT("Zapisz grę"); bButton = true; break;
 		case EMenuRow::Quit: Label = TEXT("Wyjdź z gry"); bButton = true; break;
 		case EMenuRow::Size: Label = TEXT("Rozmiar mapy"); Value = SizeNames[(int32)S.Size]; bAdjust = true; break;
@@ -283,6 +298,87 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 		? TEXT("Góra/Dół: wybór   Enter: wykonaj")
 		: (Page == EMenuPage::Main ? TEXT("Góra/Dół: wybór   Enter: wykonaj   Esc: wróć do gry") : TEXT("Góra/Dół: wybór   Lewo/Prawo: zmiana   Enter: wykonaj   Esc: wstecz"));
 	Canvas->DrawText(Font, Hint, 16.f, H - 26.f, 0.9f, 0.9f);
+}
+
+void AChickenHUD::DrawMainMenu(const AChickenGame* GM)
+{
+	const FMenuState& Menu = GM->GetMenu();
+	if (!Canvas || !GEngine) return;
+	UFont* Big = GEngine->GetLargeFont();
+	UFont* Small = GEngine->GetMediumFont();
+	const float W = (float)Canvas->SizeX;
+	const float H = (float)Canvas->SizeY;
+
+	// Ilustracja 1672x941 "cover": skalujemy tak, by wypelnic ekran, nadmiar kadrujemy przez UV.
+	const float ImgW = 1672.f, ImgH = 941.f;
+	const float Sc = FMath::Max(W / ImgW, H / ImgH);
+	const float OX = (W - ImgW * Sc) * 0.5f, OY = (H - ImgH * Sc) * 0.5f;
+	UTexture* Bg = const_cast<AChickenGame*>(GM)->GetMenuBgTexture();
+	const bool bArt = Bg && !Menu.bGameStarted;
+	if (bArt)
+	{
+		DrawTexture(Bg, 0.f, 0.f, W, H, -OX / (ImgW * Sc), -OY / (ImgH * Sc), W / (ImgW * Sc), H / (ImgH * Sc), FLinearColor::White, BLEND_Opaque);
+	}
+	else
+	{
+		for (int32 b = 0; b < 36; ++b)
+		{
+			const float T = (float)b / 35.f;
+			DrawRect(FLinearColor(FMath::Lerp(0.035f, 0.008f, T), FMath::Lerp(0.045f, 0.010f, T), FMath::Lerp(0.09f, 0.022f, T), Menu.bGameStarted ? 0.9f : 1.f), 0.f, H * b / 36.f, W, H / 36.f + 1.f);
+		}
+		Canvas->SetDrawColor(255, 205, 60);
+		const TCHAR* Title = TEXT("Chicken-civ");
+		float TW = 0.f, TH = 0.f;
+		Canvas->TextSize(Big, Title, TW, TH, 2.2f, 2.2f);
+		Canvas->DrawText(Big, Title, 105.f * Sc + OX, 110.f * Sc + OY, 2.2f, 2.2f);
+	}
+
+	// Przyciski w tym samym miejscu, co na ilustracji (zakrywaja namalowane).
+	const float BX = 105.f * Sc + OX - 4.f * Sc, BW = 327.f * Sc + 8.f * Sc;
+	const float BH = 79.f * Sc + 5.f * Sc, Pitch = 87.f * Sc;
+	float BY = 337.f * Sc + OY - 2.5f * Sc;
+	const float TextScale = FMath::Clamp(Sc * 1.9f, 1.0f, 2.6f);
+	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i)
+	{
+		const EMenuRow Row = (EMenuRow)i;
+		if (!GM->IsMenuRowVisible(Row)) continue;
+		const TCHAR* Label = TEXT("");
+		switch (Row)
+		{
+		case EMenuRow::Resume: Label = TEXT("Wznów"); break;
+		case EMenuRow::NewGame: Label = TEXT("Nowa Gra"); break;
+		case EMenuRow::MultiGame: Label = TEXT("Multiplayer"); break;
+		case EMenuRow::Load: Label = TEXT("Kontynuuj"); break;
+		case EMenuRow::Save: Label = TEXT("Zapisz"); break;
+		case EMenuRow::OpenSettings: Label = TEXT("Ustawienia"); break;
+		case EMenuRow::OpenCredits: Label = TEXT("Autorzy"); break;
+		case EMenuRow::Quit: Label = TEXT("Wyjdź"); break;
+		default: break;
+		}
+		const bool bSel = (Menu.Row == i);
+		const float R = 8.f * Sc;
+		// "Zaokraglone" rogi: dwa nakladajace sie prostokaty (ramka, potem wypelnienie).
+		const FLinearColor Frame(FColor(96, 62, 34));
+		const FLinearColor Fill = bSel ? FLinearColor(FColor(250, 200, 92)) : FLinearColor(FColor(240, 220, 190));
+		const float Bd = FMath::Max(2.f, 3.f * Sc);
+		DrawRect(Frame, BX + R, BY, BW - 2.f * R, BH);
+		DrawRect(Frame, BX, BY + R, BW, BH - 2.f * R);
+		DrawRect(Fill, BX + R, BY + Bd, BW - 2.f * R, BH - 2.f * Bd);
+		DrawRect(Fill, BX + Bd, BY + R, BW - 2.f * Bd, BH - 2.f * R);
+		float TW = 0.f, TH = 0.f;
+		Canvas->TextSize(Big, Label, TW, TH, TextScale, TextScale);
+		Canvas->SetDrawColor(78, 52, 30);
+		Canvas->DrawText(Big, Label, BX + (BW - TW) * 0.5f, BY + (BH - TH) * 0.5f, TextScale, TextScale);
+		BY += Pitch;
+	}
+
+	if (!Menu.Message.IsEmpty())
+	{
+		Canvas->SetDrawColor(255, 120, 60);
+		Canvas->DrawText(Small, Menu.Message, BX, BY + 6.f, 1.1f, 1.1f);
+	}
+	Canvas->SetDrawColor(255, 255, 255);
+	Canvas->DrawText(Small, Menu.bGameStarted ? TEXT("Góra/Dół: wybór   Enter: wykonaj   Esc: wróć do gry") : TEXT("Góra/Dół: wybór   Enter: wykonaj"), 16.f, H - 26.f, 0.9f, 0.9f);
 }
 
 void AChickenHUD::DrawBattle(const AChickenGame* GM)

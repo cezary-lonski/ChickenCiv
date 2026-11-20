@@ -1,6 +1,8 @@
 #include "Core/ChickenGame.h"
 #include "Core/ChickenCommand.h"
 #include "MediaPlayer.h"
+#include "ImageUtils.h"
+#include "Engine/Texture2D.h"
 #include "MediaTexture.h"
 #include "MediaSoundComponent.h"
 #include "Misc/Paths.h"
@@ -115,7 +117,7 @@ void AChickenGame::BeginPlay()
 		if (!bSkipMenu && !bLobbyRequested) { if (!Auth::LoadRemembered()) Login.bOpen = true; }
 		if (FParse::Param(FCommandLine::Get(), TEXT("ShowLogin"))) Login.bOpen = true;
 		int32 DbgPage = -1; // narzedzie do zrzutow: -MenuPage=0..4 pokazuje wybrana strone menu
-		if (FParse::Value(FCommandLine::Get(), TEXT("-MenuPage="), DbgPage) && DbgPage >= 0 && DbgPage <= 4) { Login.bOpen = false; SetMenuPage((EMenuPage)DbgPage); }
+		if (FParse::Value(FCommandLine::Get(), TEXT("-MenuPage="), DbgPage) && DbgPage >= 0 && DbgPage <= 6) { Login.bOpen = false; SetMenuPage((EMenuPage)DbgPage); }
 		// Intro: film przed pierwszym menu (nie w LAN-lobby, nie przy opcjach URL; -NoIntro wylacza, -ShowIntro wymusza).
 		if (FParse::Param(FCommandLine::Get(), TEXT("ShowIntro")) || (!bSkipMenu && !bLobbyRequested && !FParse::Param(FCommandLine::Get(), TEXT("NoIntro")))) StartIntro();
 	}
@@ -430,9 +432,11 @@ bool AChickenGame::IsMenuRowVisible(EMenuRow Row) const
 	case EMenuRow::NewGame:
 	case EMenuRow::MultiGame:
 	case EMenuRow::Load:
-	case EMenuRow::Account: return !bNet && P == EMenuPage::Main;
+	case EMenuRow::OpenSettings:
+	case EMenuRow::OpenCredits: return !bNet && P == EMenuPage::Main;
+	case EMenuRow::Account: return !bNet && P == EMenuPage::Settings;
 	case EMenuRow::Save: return Menu.bGameStarted && !bNet && P == EMenuPage::Main;
-	case EMenuRow::ApiKey: return P == EMenuPage::Main;
+	case EMenuRow::ApiKey: return P == EMenuPage::Settings;
 	case EMenuRow::Quit: return P == EMenuPage::Main || bNet;
 	case EMenuRow::Size:
 	case EMenuRow::Civs:
@@ -536,6 +540,8 @@ void AChickenGame::MenuActivate()
 		Menu.bOpen = false;
 		break;
 	case EMenuRow::NewGame: SetMenuPage(EMenuPage::Setup); break;
+	case EMenuRow::OpenSettings: SetMenuPage(EMenuPage::Settings); break;
+	case EMenuRow::OpenCredits: SetMenuPage(EMenuPage::Credits); break;
 	case EMenuRow::MultiGame: SetMenuPage(EMenuPage::Multi); break;
 	case EMenuRow::HotSeat: SetMenuPage(EMenuPage::HotSeat); break;
 	case EMenuRow::LanMenu: SetMenuPage(EMenuPage::Lan); break;
@@ -1250,6 +1256,17 @@ bool AChickenGame::ProposePeace()
 
 // ===== Intro =====
 UTexture* AChickenGame::GetIntroTexture() const { return IntroTexture; }
+
+UTexture* AChickenGame::GetMenuBgTexture()
+{
+	if (!bMenuBgTried)
+	{
+		bMenuBgTried = true;
+		const FString Path = FPaths::ProjectContentDir() / TEXT("UI/MenuBg.jpg");
+		if (FPaths::FileExists(Path)) MenuBgTexture = FImageUtils::ImportFileAsTexture2D(Path);
+	}
+	return MenuBgTexture;
+}
 
 void AChickenGame::StartIntro()
 {
