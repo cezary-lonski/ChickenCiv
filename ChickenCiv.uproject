@@ -1,0 +1,21 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Chicken Civ - turowa strategia kurczakow na mapie heksagonalnej",
+	"Modules": [
+		{
+			"Name": "ChickenCiv",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{ "Name": "PythonScriptPlugin", "Enabled": true },
+		{ "Name": "EditorScriptingUtilities", "Enabled": true },
+		{ "Name": "ProceduralMeshComponent", "Enabled": true },
+		{ "Name": "WmfMedia", "Enabled": true },
+		{ "Name": "ElectraPlayer", "Enabled": true }
+	],
+	"TargetPlatforms": [ "Windows" ]
+}
