@@ -11,3 +11,5 @@ Saved/
 __pycache__/
 *.pyc
 Build/
+
+Dist/

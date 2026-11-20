@@ -105,13 +105,17 @@ void AChickenGame::BeginPlay()
 			|| FString(FCommandLine::Get()).Contains(TEXT("-AutoShot=")));
 		Menu.Settings = DefaultSettings;
 		if (!bSkipMenu) LoadMenuPrefs();
+		Menu.Settings.Seed = 0; // kazda nowa gra ma losowa mape, chyba ze gracz wpisze ziarno
 		StartNewGame(bSkipMenu ? DefaultSettings : Menu.Settings);
 		Menu.bGameStarted = bSkipMenu;
 		Menu.bOpen = !bSkipMenu;
+		if (!IsMenuRowVisible((EMenuRow)Menu.Row)) SetMenuPage(Menu.Page);
 		bHandoff = false;
 		// Logowanie: pamietane konto wchodzi od razu, inaczej ekran logowania (lub -ShowLogin do zrzutow).
 		if (!bSkipMenu && !bLobbyRequested) { if (!Auth::LoadRemembered()) Login.bOpen = true; }
 		if (FParse::Param(FCommandLine::Get(), TEXT("ShowLogin"))) Login.bOpen = true;
+		int32 DbgPage = -1; // narzedzie do zrzutow: -MenuPage=0..4 pokazuje wybrana strone menu
+		if (FParse::Value(FCommandLine::Get(), TEXT("-MenuPage="), DbgPage) && DbgPage >= 0 && DbgPage <= 4) { Login.bOpen = false; SetMenuPage((EMenuPage)DbgPage); }
 		// Intro: film przed pierwszym menu (nie w LAN-lobby, nie przy opcjach URL; -NoIntro wylacza, -ShowIntro wymusza).
 		if (FParse::Param(FCommandLine::Get(), TEXT("ShowIntro")) || (!bSkipMenu && !bLobbyRequested && !FParse::Param(FCommandLine::Get(), TEXT("NoIntro")))) StartIntro();
 	}
@@ -408,21 +412,68 @@ void AChickenGame::ClearControllerSelection()
 	}
 }
 
+EMenuPage AChickenGame::GetEffectiveMenuPage() const
+{
+	return IsNetServer() ? EMenuPage::Setup : Menu.Page;
+}
+
 bool AChickenGame::IsMenuRowVisible(EMenuRow Row) const
 {
 	if (bClientProxy) return Row == EMenuRow::Quit; // klient LAN czeka na gospodarza
 	const bool bNet = IsNetworked();
+	const bool bLobby = IsNetServer();
+	const EMenuPage P = GetEffectiveMenuPage();
+	const bool bSetup = (P == EMenuPage::Setup || P == EMenuPage::HotSeat);
 	switch (Row)
 	{
-	case EMenuRow::Resume: return Menu.bGameStarted;
-	case EMenuRow::Account: return !bNet;
-	case EMenuRow::Save: return Menu.bGameStarted && !bNet;
-	case EMenuRow::Load: return !bNet;
+	case EMenuRow::Resume: return Menu.bGameStarted && (P == EMenuPage::Main || bNet);
+	case EMenuRow::NewGame:
+	case EMenuRow::MultiGame:
+	case EMenuRow::Load:
+	case EMenuRow::Account: return !bNet && P == EMenuPage::Main;
+	case EMenuRow::Save: return Menu.bGameStarted && !bNet && P == EMenuPage::Main;
+	case EMenuRow::ApiKey: return P == EMenuPage::Main;
+	case EMenuRow::Quit: return P == EMenuPage::Main || bNet;
+	case EMenuRow::Size:
+	case EMenuRow::Civs:
+	case EMenuRow::Difficulty:
+	case EMenuRow::Race:
+	case EMenuRow::Color:
+	case EMenuRow::Seed:
+	case EMenuRow::Start: return bSetup;
+	case EMenuRow::Humans: return P == EMenuPage::HotSeat;
+	case EMenuRow::HotSeat:
+	case EMenuRow::LanMenu: return P == EMenuPage::Multi;
 	case EMenuRow::HostLan:
 	case EMenuRow::JoinAddress:
-	case EMenuRow::JoinLan: return !bNet;
-	case EMenuRow::NewGame: return !bNet || IsNetServer();
-	default: return true;
+	case EMenuRow::JoinLan: return P == EMenuPage::Lan;
+	case EMenuRow::Back: return !bLobby && P != EMenuPage::Main;
+	default: return false;
+	}
+}
+
+void AChickenGame::SetMenuPage(EMenuPage Page)
+{
+	Menu.Page = Page;
+	Menu.Message.Reset();
+	FMapSettings& S = Menu.Settings;
+	if (Page == EMenuPage::HotSeat) S.NumHumans = FMath::Clamp(FMath::Max(2, S.NumHumans), 2, FMath::Max(2, S.NumPlayers));
+	if (Page == EMenuPage::Setup) S.NumHumans = 1;
+	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i)
+	{
+		if (IsMenuRowVisible((EMenuRow)i)) { Menu.Row = i; break; }
+	}
+}
+
+void AChickenGame::MenuBack()
+{
+	if (IsNetworked()) return;
+	switch (Menu.Page)
+	{
+	case EMenuPage::HotSeat:
+	case EMenuPage::Lan: SetMenuPage(EMenuPage::Multi); break;
+	case EMenuPage::Main: break;
+	default: SetMenuPage(EMenuPage::Main); break;
 	}
 }
 
@@ -433,15 +484,15 @@ void AChickenGame::ToggleMenu()
 	if (IsInBattle() || bHandoff) return;
 	if (Menu.bOpen)
 	{
-		if (Menu.bGameStarted) Menu.bOpen = false; // Esc w menu startowym nic nie robi
+		if (!IsNetworked() && Menu.Page != EMenuPage::Main) MenuBack();
+		else if (Menu.bGameStarted) Menu.bOpen = false; // Esc w menu startowym nic nie robi
 	}
 	else
 	{
 		Menu.bOpen = true;
-		Menu.Message.Reset();
-		Menu.Row = (int32)(Menu.bGameStarted ? EMenuRow::Resume : EMenuRow::NewGame);
 		// Ustawienia edytowane zaczynaja od tych z biezacej gry.
 		if (const AChickenGameState* GS = GetChickenState()) { const int32 Seed = Menu.Settings.Seed; Menu.Settings = GS->Settings; Menu.Settings.Seed = Seed; }
+		SetMenuPage(EMenuPage::Main);
 	}
 }
 
@@ -449,6 +500,7 @@ void AChickenGame::MenuMove(int32 Delta)
 {
 	if (!Menu.bOpen || Login.bOpen) return;
 	const int32 N = (int32)EMenuRow::Count;
+	if (!IsMenuRowVisible((EMenuRow)Menu.Row)) { SetMenuPage(Menu.Page); return; }
 	for (int32 Step = 0; Step < N; ++Step)
 	{
 		Menu.Row = ((Menu.Row + Delta) % N + N) % N;
@@ -466,7 +518,7 @@ void AChickenGame::MenuChange(int32 Delta)
 	{
 	case EMenuRow::Size: S.Size = (EMapSize)Cycle((int32)S.Size, 0, 2); break;
 	case EMenuRow::Civs: S.NumPlayers = Cycle(S.NumPlayers, 2, 8); S.NumHumans = FMath::Min(S.NumHumans, S.NumPlayers); break;
-	case EMenuRow::Humans: S.NumHumans = Cycle(S.NumHumans, 1, S.NumPlayers); break;
+	case EMenuRow::Humans: S.NumHumans = Cycle(S.NumHumans, 2, FMath::Max(2, S.NumPlayers)); break;
 	case EMenuRow::Difficulty: S.Difficulty = (EDifficulty)Cycle((int32)S.Difficulty, 0, 2); break;
 	case EMenuRow::Race: S.PlayerRace = (EChickenRace)Cycle((int32)S.PlayerRace, 0, 3); break;
 	case EMenuRow::Color: S.PlayerColorIndex = Cycle(S.PlayerColorIndex, -1, CivColors::NumPalette - 1); break;
@@ -483,7 +535,12 @@ void AChickenGame::MenuActivate()
 	case EMenuRow::Resume:
 		Menu.bOpen = false;
 		break;
-	case EMenuRow::NewGame:
+	case EMenuRow::NewGame: SetMenuPage(EMenuPage::Setup); break;
+	case EMenuRow::MultiGame: SetMenuPage(EMenuPage::Multi); break;
+	case EMenuRow::HotSeat: SetMenuPage(EMenuPage::HotSeat); break;
+	case EMenuRow::LanMenu: SetMenuPage(EMenuPage::Lan); break;
+	case EMenuRow::Back: MenuBack(); break;
+	case EMenuRow::Start:
 		SaveMenuPrefs();
 		if (IsNetServer())
 		{
@@ -495,13 +552,17 @@ void AChickenGame::MenuActivate()
 			FChickenCommand C = FChickenCommand::Make(ECmd::NewGame);
 			C.Settings = S;
 			NewNetworkGame(S);
+				Menu.Settings.Seed = 0;
 			NetBroadcast(C);
 			break;
 		}
+		if (Menu.Page == EMenuPage::Setup) Menu.Settings.NumHumans = 1;
 		StartNewGame(Menu.Settings);
 		ClearControllerSelection();
 		Menu.bGameStarted = true;
 		Menu.bOpen = false;
+		Menu.Page = EMenuPage::Main;
+		Menu.Settings.Seed = 0; // nastepna gra znowu losowa
 		break;
 	case EMenuRow::HostLan:
 		if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
@@ -1094,7 +1155,7 @@ void AChickenGame::AutoLanStep(int32 TargetTurns)
 			Menu.Settings.Size = EMapSize::Small;
 			Menu.Settings.NumPlayers = 3;
 			Menu.Settings.Seed = 7;
-			Menu.Row = (int32)EMenuRow::NewGame;
+			Menu.Row = (int32)EMenuRow::Start;
 			MenuActivate();
 		}
 		return;

@@ -115,77 +115,157 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 	UFont* Font = GEngine->GetMediumFont();
 	const float W = (float)Canvas->SizeX;
 	const float H = (float)Canvas->SizeY;
+	const EMenuPage Page = GM->GetEffectiveMenuPage();
+	const bool bSetup = (Page == EMenuPage::Setup || Page == EMenuPage::HotSeat);
 
-	DrawRect(FLinearColor(0.03f, 0.04f, 0.07f, Menu.bGameStarted ? 0.85f : 0.97f), 0.f, 0.f, W, H);
+	// Tlo: nieprzezroczysty gradient (mapa pod spodem nie przeswituje) + subtelna siatka heksow.
+	const float Alpha = Menu.bGameStarted ? 0.94f : 1.f;
+	const int32 Bands = 36;
+	for (int32 b = 0; b < Bands; ++b)
+	{
+		const float T = (float)b / (float)(Bands - 1);
+		DrawRect(FLinearColor(FMath::Lerp(0.035f, 0.008f, T), FMath::Lerp(0.045f, 0.010f, T), FMath::Lerp(0.09f, 0.022f, T), Alpha), 0.f, H * b / Bands, W, H / Bands + 1.f);
+	}
+	{
+		const float R = 46.f;
+		const float DX = R * 1.7320508f, DY = R * 1.5f;
+		const FLinearColor Edge(0.05f, 0.065f, 0.12f, 1.f);
+		for (int32 r = -1; r * DY < H + R; ++r)
+		{
+			for (int32 q = -1; q * DX < W + R; ++q)
+			{
+				const float CX = q * DX + ((r & 1) ? DX * 0.5f : 0.f), CY = r * DY;
+				for (int32 i = 0; i < 6; ++i)
+				{
+					const float A0 = FMath::DegreesToRadians(60.f * i - 30.f), A1 = FMath::DegreesToRadians(60.f * (i + 1) - 30.f);
+					DrawLine(CX + R * FMath::Cos(A0), CY + R * FMath::Sin(A0), CX + R * FMath::Cos(A1), CY + R * FMath::Sin(A1), Edge, 1.f);
+				}
+			}
+		}
+	}
 
 	// Tytul
-	Canvas->SetDrawColor(255, 205, 60);
-	float TW = 0.f, TH = 0.f;
-	Canvas->TextSize(Font, TEXT("CHICKEN CIV"), TW, TH, 3.2f, 3.2f);
-	Canvas->DrawText(Font, TEXT("CHICKEN CIV"), (W - TW) * 0.5f, 50.f, 3.2f, 3.2f);
-	Canvas->SetDrawColor(180, 180, 190);
-	Canvas->TextSize(Font, TEXT("kurczakowa cywilizacja"), TW, TH, 1.2f, 1.2f);
-	Canvas->DrawText(Font, TEXT("kurczakowa cywilizacja"), (W - TW) * 0.5f, 50.f + 60.f, 1.2f, 1.2f);
+	auto Centered = [&](const TCHAR* Text, float Y, float Scale, FColor Col)
+	{
+		float TW = 0.f, TH = 0.f;
+		Canvas->TextSize(Font, Text, TW, TH, Scale, Scale);
+		Canvas->SetDrawColor(Col);
+		Canvas->DrawText(Font, Text, (W - TW) * 0.5f, Y, Scale, Scale);
+	};
+	Centered(TEXT("CHICKEN CIV"), 54.f, 3.2f, FColor(0, 0, 0));
+	Centered(TEXT("CHICKEN CIV"), 50.f, 3.2f, FColor(255, 205, 60));
+	const TCHAR* Sub = TEXT("kurczakowa cywilizacja");
+	switch (Page)
+	{
+	case EMenuPage::Setup: Sub = TEXT("N O W A   G R A"); break;
+	case EMenuPage::Multi: Sub = TEXT("N O W A   G R A   M U L T I P L A Y E R"); break;
+	case EMenuPage::HotSeat: Sub = TEXT("G R A   H O T   S E A T"); break;
+	case EMenuPage::Lan: Sub = TEXT("G R A   L A N"); break;
+	default: break;
+	}
+	if (GM->IsNetServer()) Sub = TEXT("P O C Z E K A L N I A   L A N");
+	Centered(Sub, 112.f, 1.2f, FColor(180, 190, 215));
 
 	static const TCHAR* SizeNames[] = { TEXT("Mała (40x24)"), TEXT("Średnia (60x38)"), TEXT("Duża (80x52)") };
 	static const TCHAR* DiffNames[] = { TEXT("Łatwy"), TEXT("Normalny"), TEXT("Trudny") };
+	static const TCHAR* RaceNames[] = { TEXT("Czerwone"), TEXT("Żółte"), TEXT("Niebieskie"), TEXT("Zielone") };
 	static const TCHAR* RacePerks[] = {
-		TEXT("Czerwone – nauka x3"), TEXT("Żółte – siła x2"),
-		TEXT("Niebieskie – statki: szybkość x10, siła x3, 5x taniej"), TEXT("Zielone – strażnik niszczy armie atakujące miasto") };
+		TEXT("Nauka x3: szybciej odkrywasz technologie."), TEXT("Siła x2: Twoje jednostki walczą dwa razy mocniej."),
+		TEXT("Statki: szybkość x10, siła x3, 5x taniej."), TEXT("Zielony Strażnik niszczy armię, która atakuje Twoje miasto.") };
 
 	const FMapSettings& S = Menu.Settings;
-	const float X0 = W * 0.5f - 330.f;
-	float Y = 170.f;
-	const float Step = 34.f;
+	const float PanelW = 780.f;
+	const float X0 = (W - PanelW) * 0.5f + 28.f;
+	const float ColVal = X0 + 300.f;
+	const float Step = bSetup ? 38.f : 46.f;
+
+	int32 NumRows = 0;
+	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i) if (GM->IsMenuRowVisible((EMenuRow)i)) ++NumRows;
+	const float PanelTop = 160.f;
+	const float PanelH = NumRows * Step + 36.f;
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.35f), (W - PanelW) * 0.5f + 6.f, PanelTop + 6.f, PanelW, PanelH); // cien
+	DrawRect(FLinearColor(0.025f, 0.032f, 0.065f, 0.97f), (W - PanelW) * 0.5f, PanelTop, PanelW, PanelH);
+	DrawRect(FLinearColor(1.f, 0.8f, 0.24f, 1.f), (W - PanelW) * 0.5f, PanelTop, PanelW, 3.f);
+
+	float Y = PanelTop + 20.f;
 	for (int32 i = 0; i < (int32)EMenuRow::Count; ++i)
 	{
 		const EMenuRow Row = (EMenuRow)i;
 		if (!GM->IsMenuRowVisible(Row)) continue;
 
 		FString Label, Value;
+		bool bAdjust = false;
+		bool bButton = false;
 		switch (Row)
 		{
-		case EMenuRow::Resume: Label = TEXT("Wznów grę"); break;
-		case EMenuRow::NewGame:
-			Label = GM->IsNetServer() ? TEXT("ROZPOCZNIJ GRĘ LAN") : TEXT("NOWA GRA");
-			if (GM->IsNetServer()) Value = FString::Printf(TEXT("połączonych graczy: %d"), GM->GetNumLobbyPlayers());
-			break;
-		case EMenuRow::Size: Label = TEXT("Rozmiar mapy"); Value = SizeNames[(int32)S.Size]; break;
-		case EMenuRow::Civs: Label = TEXT("Liczba cywilizacji"); Value = FString::FromInt(S.NumPlayers); break;
-		case EMenuRow::Humans: Label = TEXT("Gracze ludzcy (hot seat)"); Value = FString::FromInt(S.NumHumans) + (S.NumHumans > 1 ? TEXT("  – kolejno przy jednym komputerze") : TEXT("")); break;
-		case EMenuRow::Difficulty: Label = TEXT("Trudność AI"); Value = DiffNames[(int32)S.Difficulty]; break;
-		case EMenuRow::Race: Label = TEXT("Rasa kurczaka"); Value = RacePerks[(int32)S.PlayerRace]; break;
-		case EMenuRow::Color: Label = TEXT("Kolor kurczaka"); Value = CivColors::PaletteName(S.PlayerColorIndex); break;
+		case EMenuRow::Resume: Label = TEXT("Wznów grę"); bButton = true; break;
+		case EMenuRow::NewGame: Label = TEXT("Nowa gra"); bButton = true; break;
+		case EMenuRow::MultiGame: Label = TEXT("Nowa gra multiplayer"); bButton = true; break;
+		case EMenuRow::Load: Label = TEXT("Wczytaj grę"); bButton = true; break;
+		case EMenuRow::Save: Label = TEXT("Zapisz grę"); bButton = true; break;
+		case EMenuRow::Quit: Label = TEXT("Wyjdź z gry"); bButton = true; break;
+		case EMenuRow::Size: Label = TEXT("Rozmiar mapy"); Value = SizeNames[(int32)S.Size]; bAdjust = true; break;
+		case EMenuRow::Civs: Label = TEXT("Liczba cywilizacji"); Value = FString::FromInt(S.NumPlayers); bAdjust = true; break;
+		case EMenuRow::Humans: Label = TEXT("Gracze (jeden komputer)"); Value = FString::FromInt(S.NumHumans); bAdjust = true; break;
+		case EMenuRow::Difficulty: Label = TEXT("Trudność AI"); Value = DiffNames[(int32)S.Difficulty]; bAdjust = true; break;
+		case EMenuRow::Race: Label = TEXT("Rasa kurczaka"); Value = RaceNames[(int32)S.PlayerRace]; bAdjust = true; break;
+		case EMenuRow::Color: Label = TEXT("Kolor kurczaka"); Value = CivColors::PaletteName(S.PlayerColorIndex); bAdjust = true; break;
 		case EMenuRow::Seed: Label = TEXT("Ziarno mapy"); Value = S.Seed == 0 ? FString(TEXT("losowe  (wpisz cyfry, Backspace kasuje)")) : FString::FromInt(S.Seed); break;
-		case EMenuRow::ApiKey: Label = TEXT("Klucz API LLM (AI)"); Value = LlmStrategy::HasApiKey() ? TEXT("ustawiony  (Enter/Ctrl+V: wklej nowy, Del: usuń)") : TEXT("brak – AI gra klasycznie  (Ctrl+V: wklej ze schowka)"); break;
+		case EMenuRow::Start:
+			Label = GM->IsNetServer() ? TEXT("ROZPOCZNIJ GRĘ LAN") : TEXT("ROZPOCZNIJ GRĘ");
+			if (GM->IsNetServer()) Value = FString::Printf(TEXT("połączonych graczy: %d"), GM->GetNumLobbyPlayers());
+			bButton = true;
+			break;
+		case EMenuRow::ApiKey: Label = TEXT("Klucz API LLM (AI)"); Value = LlmStrategy::HasApiKey() ? TEXT("ustawiony  (Enter: wklej nowy, Del: usuń)") : TEXT("brak – AI gra klasycznie  (Ctrl+V: wklej)"); break;
 		case EMenuRow::Account:
 			Label = TEXT("Konto");
-			Value = Auth::Current().IsLoggedIn() ? FString::Printf(TEXT("%s (%s)  –  Enter: zmień konto"), *Auth::DisplayName(), *Auth::Current().Provider) : FString(TEXT("niezalogowany  –  Enter: zaloguj"));
+			Value = Auth::Current().IsLoggedIn() ? FString::Printf(TEXT("%s (%s)"), *Auth::DisplayName(), *Auth::Current().Provider) : FString(TEXT("niezalogowany  –  Enter: zaloguj"));
 			break;
-		case EMenuRow::HostLan: Label = TEXT("Hostuj grę LAN"); Value = TEXT("Enter: otwórz poczekalnię (inni dołączają po adresie IP)"); break;
-		case EMenuRow::JoinAddress: Label = TEXT("Adres gospodarza"); Value = Menu.JoinAddress + (Menu.Row == i ? TEXT("_") : TEXT("")) + (Menu.Row == i ? TEXT("   (cyfry i kropka)") : TEXT("")); break;
-		case EMenuRow::JoinLan: Label = TEXT("Dołącz do gry LAN"); break;
-		case EMenuRow::Load: Label = TEXT("Wczytaj grę"); break;
-		case EMenuRow::Save: Label = TEXT("Zapisz grę"); break;
-		case EMenuRow::Quit: Label = TEXT("Wyjdź"); break;
+		case EMenuRow::HotSeat: Label = TEXT("Gra hot seat"); Value = TEXT("kilku graczy przy jednym komputerze"); break;
+		case EMenuRow::LanMenu: Label = TEXT("Gra LAN"); Value = TEXT("przez sieć lokalną"); break;
+		case EMenuRow::HostLan: Label = TEXT("Hostuj grę LAN"); Value = TEXT("poczekalnia, inni dołączają po IP"); break;
+		case EMenuRow::JoinAddress: Label = TEXT("Adres gospodarza"); Value = Menu.JoinAddress + (Menu.Row == i ? TEXT("_   (cyfry i kropka)") : TEXT("")); break;
+		case EMenuRow::JoinLan: Label = TEXT("Dołącz do gry LAN"); bButton = true; break;
+		case EMenuRow::Back: Label = TEXT("Wróć"); bButton = true; break;
 		default: break;
 		}
 
 		const bool bSel = (Menu.Row == i);
-		if (bSel) DrawRect(FLinearColor(0.2f, 0.25f, 0.4f, 0.9f), X0 - 14.f, Y - 4.f, 700.f, Step - 2.f);
-		Canvas->SetDrawColor(bSel ? FColor(255, 255, 255) : FColor(190, 190, 200));
-		Canvas->DrawText(Font, (bSel ? TEXT("> ") : TEXT("  ")) + Label, X0, Y, 1.2f, 1.2f);
+		if (bSel)
+		{
+			DrawRect(FLinearColor(0.07f, 0.10f, 0.24f, 1.f), X0 - 20.f, Y - 5.f, PanelW - 16.f, Step - 4.f);
+			DrawRect(FLinearColor(1.f, 0.8f, 0.24f, 1.f), X0 - 20.f, Y - 5.f, 5.f, Step - 4.f);
+		}
+		Canvas->SetDrawColor(bSel ? FColor(255, 255, 255) : (bButton ? FColor(235, 235, 245) : FColor(190, 195, 210)));
+		Canvas->DrawText(Font, Label, X0, Y, bButton ? 1.3f : 1.15f, bButton ? 1.3f : 1.15f);
 		if (!Value.IsEmpty())
 		{
-			Canvas->SetDrawColor(bSel ? FColor(255, 230, 120) : FColor(170, 170, 120));
-			Canvas->DrawText(Font, Value, X0 + 290.f, Y, 1.1f, 1.1f);
+			Canvas->SetDrawColor(bSel ? FColor(255, 230, 120) : FColor(170, 170, 125));
+			const FString Shown = (bAdjust && bSel) ? (TEXT("<  ") + Value + TEXT("  >")) : Value;
+			Canvas->DrawText(Font, Shown, ColVal + (Row == EMenuRow::Color ? 34.f : 0.f), Y, 1.1f, 1.1f);
 		}
 		if (Row == EMenuRow::Color)
 		{
 			const FLinearColor Sw = S.PlayerColorIndex >= 0 ? CivColors::Palette(S.PlayerColorIndex) : CivColors::RaceColor(S.PlayerRace);
-			DrawRect(Sw, X0 + 250.f, Y + 2.f, 26.f, 20.f);
+			DrawRect(FLinearColor::Black, ColVal - 1.f, Y + 1.f, 28.f, 22.f);
+			DrawRect(Sw, ColVal + 1.f, Y + 3.f, 24.f, 18.f);
 		}
 		Y += Step;
+	}
+
+	// Karta opisu rasy na ekranach tworzenia gry.
+	float BelowY = PanelTop + PanelH + 14.f;
+	if (bSetup)
+	{
+		const int32 RI = (int32)S.PlayerRace;
+		const FLinearColor RC = S.PlayerColorIndex >= 0 ? CivColors::Palette(S.PlayerColorIndex) : CivColors::RaceColor(S.PlayerRace);
+		DrawRect(FLinearColor(0.025f, 0.032f, 0.065f, 0.97f), (W - PanelW) * 0.5f, BelowY, PanelW, 64.f);
+		DrawRect(RC, (W - PanelW) * 0.5f, BelowY, 8.f, 64.f);
+		Canvas->SetDrawColor(255, 230, 120);
+		Canvas->DrawText(Font, FString::Printf(TEXT("%s kurczaki"), RaceNames[RI]), X0, BelowY + 8.f, 1.2f, 1.2f);
+		Canvas->SetDrawColor(200, 205, 220);
+		Canvas->DrawText(Font, RacePerks[RI], X0, BelowY + 34.f, 1.05f, 1.05f);
+		BelowY += 78.f;
 	}
 
 	if (GM->IsNetClient() && !Menu.bGameStarted)
@@ -196,10 +276,13 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 	if (!Menu.Message.IsEmpty())
 	{
 		Canvas->SetDrawColor(255, 160, 80);
-		Canvas->DrawText(Font, Menu.Message, X0, Y + 10.f, 1.2f, 1.2f);
+		Canvas->DrawText(Font, Menu.Message, X0, BelowY, 1.2f, 1.2f);
 	}
-	Canvas->SetDrawColor(160, 160, 170);
-	Canvas->DrawText(Font, TEXT("Góra/Dół: wybór   Lewo/Prawo: zmiana   Enter: wykonaj   Esc: wróć do gry"), 16.f, H - 26.f, 0.9f, 0.9f);
+	Canvas->SetDrawColor(160, 165, 185);
+	const TCHAR* Hint = (Page == EMenuPage::Main && !Menu.bGameStarted)
+		? TEXT("Góra/Dół: wybór   Enter: wykonaj")
+		: (Page == EMenuPage::Main ? TEXT("Góra/Dół: wybór   Enter: wykonaj   Esc: wróć do gry") : TEXT("Góra/Dół: wybór   Lewo/Prawo: zmiana   Enter: wykonaj   Esc: wstecz"));
+	Canvas->DrawText(Font, Hint, 16.f, H - 26.f, 0.9f, 0.9f);
 }
 
 void AChickenHUD::DrawBattle(const AChickenGame* GM)

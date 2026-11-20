@@ -19,7 +19,10 @@ class UMediaSoundComponent;
 class UTexture;
 
 /** Wiersze menu glownego / pauzy. */
-enum class EMenuRow : uint8 { Resume, NewGame, Size, Civs, Humans, Difficulty, Race, Color, Seed, ApiKey, Account, HostLan, JoinAddress, JoinLan, Load, Save, Quit, Count };
+enum class EMenuRow : uint8 { Resume, NewGame, MultiGame, Load, Save, Account, ApiKey, Quit, Size, Civs, Humans, Difficulty, Race, Color, Seed, Start, HotSeat, LanMenu, HostLan, JoinAddress, JoinLan, Back, Count };
+
+/** Strony menu: glowne, tworzenie gry, wybor multiplayera, hot seat, LAN. */
+enum class EMenuPage : uint8 { Main, Setup, Multi, HotSeat, Lan };
 
 /** Ekran logowania (przed menu). */
 enum class ELoginRow : uint8 { Google, Microsoft, EmailLogin, EmailRegister, Guest, Count };
@@ -46,6 +49,7 @@ struct FMenuState
 {
 	bool bOpen = false;
 	bool bGameStarted = false;  // czy gracz rozpoczal gre (Wznow/Zapisz tylko wtedy)
+	EMenuPage Page = EMenuPage::Main;
 	int32 Row = (int32)EMenuRow::NewGame;
 	FMapSettings Settings;      // ustawienia nowej gry edytowane w menu
 	FString Message;            // krotka informacja zwrotna (np. "Wczytano grę")
@@ -142,6 +146,10 @@ public:
 	bool IsMenuOpen() const { return Menu.bOpen; }
 	const FMenuState& GetMenu() const { return Menu; }
 	bool IsMenuRowVisible(EMenuRow Row) const;
+	/** Strona faktycznie pokazana (gospodarz LAN zawsze widzi tworzenie gry). */
+	EMenuPage GetEffectiveMenuPage() const;
+	void SetMenuPage(EMenuPage Page);
+	void MenuBack();
 	void ToggleMenu();
 	void MenuMove(int32 Delta);
 	void MenuChange(int32 Delta);
