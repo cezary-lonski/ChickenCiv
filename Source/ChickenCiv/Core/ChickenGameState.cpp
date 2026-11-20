@@ -3,6 +3,7 @@
 #include "Core/CivRules.h"
 #include "Core/CivAI.h"
 #include "Core/LlmStrategy.h"
+#include "Core/AccountAuth.h"
 #include "Map/MapGenerator.h"
 
 bool AChickenGameState::NewGame(const FMapSettings& InSettings)
@@ -23,6 +24,8 @@ bool AChickenGameState::NewGame(const FMapSettings& InSettings)
 		P.bIsAI = (i >= Settings.NumHumans);
 		P.Name = P.bIsAI ? FString::Printf(TEXT("AI %d"), i + 1 - Settings.NumHumans)
 			: (Settings.NumHumans == 1 ? FString(TEXT("Gracz")) : FString::Printf(TEXT("Gracz %d"), i + 1));
+		// Zalogowany gracz (poza siecia) wystepuje pod swoim imieniem.
+		if (i == 0 && !P.bIsAI && GetNetMode() == NM_Standalone && !Auth::DisplayName().IsEmpty()) P.Name = Auth::DisplayName();
 		// Kolor: wybrany dla gracza 1; przy wiecej niz 4 graczach reszta dostaje kolory z palety, by sie roznic.
 		P.ColorIndex = (i == 0) ? Settings.PlayerColorIndex : (i >= 4 ? i : -1);
 		Players.Add(P);

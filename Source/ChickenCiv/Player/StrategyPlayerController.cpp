@@ -134,6 +134,23 @@ void AStrategyPlayerController::BeginPlay()
 	if (IsLocalController()) AChickenGame::Ensure(GetWorld());
 }
 
+bool AStrategyPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	// Ekran logowania pochlania cale wejscie klawiatury (wpisywanie e-maila i hasla).
+	AChickenGame* GM = AChickenGame::Get(GetWorld());
+	if (GM && GM->IsLoginOpen() && !GM->IsIntro())
+	{
+		if (Params.Event == IE_Pressed || Params.Event == IE_Repeat)
+		{
+			const bool bShift = IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);
+			const bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+			if (!Params.Key.IsMouseButton()) GM->LoginKey(Params.Key, bShift, bCtrl);
+		}
+		if (!Params.Key.IsMouseButton()) return true;
+	}
+	return Super::InputKey(Params);
+}
+
 void AStrategyPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);

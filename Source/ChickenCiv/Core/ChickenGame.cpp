@@ -4,6 +4,8 @@
 #include "MediaTexture.h"
 #include "MediaSoundComponent.h"
 #include "Misc/Paths.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "Core/ChickenGameState.h"
 #include "Core/ChickenSave.h"
 #include "Core/CivRules.h"
@@ -107,6 +109,9 @@ void AChickenGame::BeginPlay()
 		Menu.bGameStarted = bSkipMenu;
 		Menu.bOpen = !bSkipMenu;
 		bHandoff = false;
+		// Logowanie: pamietane konto wchodzi od razu, inaczej ekran logowania (lub -ShowLogin do zrzutow).
+		if (!bSkipMenu && !bLobbyRequested) { if (!Auth::LoadRemembered()) Login.bOpen = true; }
+		if (FParse::Param(FCommandLine::Get(), TEXT("ShowLogin"))) Login.bOpen = true;
 		// Intro: film przed pierwszym menu (nie w LAN-lobby, nie przy opcjach URL; -NoIntro wylacza, -ShowIntro wymusza).
 		if (FParse::Param(FCommandLine::Get(), TEXT("ShowIntro")) || (!bSkipMenu && !bLobbyRequested && !FParse::Param(FCommandLine::Get(), TEXT("NoIntro")))) StartIntro();
 	}
@@ -410,6 +415,7 @@ bool AChickenGame::IsMenuRowVisible(EMenuRow Row) const
 	switch (Row)
 	{
 	case EMenuRow::Resume: return Menu.bGameStarted;
+	case EMenuRow::Account: return !bNet;
 	case EMenuRow::Save: return Menu.bGameStarted && !bNet;
 	case EMenuRow::Load: return !bNet;
 	case EMenuRow::HostLan:
@@ -423,6 +429,7 @@ bool AChickenGame::IsMenuRowVisible(EMenuRow Row) const
 void AChickenGame::ToggleMenu()
 {
 	if (bIntro) { SkipIntro(); return; }
+	if (Login.bOpen) return;
 	if (IsInBattle() || bHandoff) return;
 	if (Menu.bOpen)
 	{
@@ -440,7 +447,7 @@ void AChickenGame::ToggleMenu()
 
 void AChickenGame::MenuMove(int32 Delta)
 {
-	if (!Menu.bOpen) return;
+	if (!Menu.bOpen || Login.bOpen) return;
 	const int32 N = (int32)EMenuRow::Count;
 	for (int32 Step = 0; Step < N; ++Step)
 	{
@@ -452,7 +459,7 @@ void AChickenGame::MenuMove(int32 Delta)
 
 void AChickenGame::MenuChange(int32 Delta)
 {
-	if (!Menu.bOpen) return;
+	if (!Menu.bOpen || Login.bOpen) return;
 	FMapSettings& S = Menu.Settings;
 	auto Cycle = [Delta](int32 V, int32 Min, int32 Max) { const int32 R = Max - Min + 1; return Min + ((V - Min + Delta) % R + R) % R; };
 	switch ((EMenuRow)Menu.Row)
@@ -469,7 +476,7 @@ void AChickenGame::MenuChange(int32 Delta)
 
 void AChickenGame::MenuActivate()
 {
-	if (!Menu.bOpen) return;
+	if (!Menu.bOpen || Login.bOpen) return;
 	Menu.Message.Reset();
 	switch ((EMenuRow)Menu.Row)
 	{
@@ -522,6 +529,9 @@ void AChickenGame::MenuActivate()
 		break;
 	case EMenuRow::ApiKey:
 		MenuPasteApiKey();
+		break;
+	case EMenuRow::Account:
+		OpenLogin();
 		break;
 	default:
 		MenuChange(1);
@@ -1234,4 +1244,157 @@ void AChickenGame::OnIntroFailed(FString FailedUrl)
 {
 	UE_LOG(LogTemp, Warning, TEXT("Intro: nie udalo sie otworzyc filmu (%s)"), *FailedUrl);
 	SkipIntro();
+}
+
+
+// ===== Logowanie =====
+void AChickenGame::OpenLogin()
+{
+	LoginCancelWait();
+	Login = FLoginState();
+	Login.bOpen = true;
+	if (!Auth::Current().Provider.IsEmpty()) Login.Message = FString::Printf(TEXT("Zalogowano jako %s – wybierz inne konto lub Esc"), *Auth::DisplayName());
+}
+
+void AChickenGame::LoginFinish(const FAccount& Account)
+{
+	LoginCancelWait();
+	Auth::SetCurrent(Account);
+	Auth::SaveRemembered();
+	Login = FLoginState();
+	Menu.Message = FString::Printf(TEXT("Zalogowano: %s"), *Account.DisplayName);
+}
+
+void AChickenGame::LoginCancelWait()
+{
+	Login.bWaiting = false;
+	GetWorldTimerManager().ClearTimer(LoginTimer);
+}
+
+void AChickenGame::LoginTick()
+{
+	if (!Login.bWaiting || Login.bPollInFlight || !GetWorld()) return;
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now - Login.WaitStart > Login.Device.ExpiresIn) { LoginCancelWait(); Login.Message = TEXT("Kod wygasł – spróbuj ponownie"); return; }
+	if (Now < Login.NextPoll) return;
+	Login.bPollInFlight = true;
+	TWeakObjectPtr<AChickenGame> Weak(this);
+	Auth::PollToken((Auth::EProvider)Login.Provider, Login.Device, [Weak](int32 State, const FAccount& Account, const FString& Error)
+	{
+		AChickenGame* G = Weak.Get();
+		if (!G) return;
+		G->Login.bPollInFlight = false;
+		G->Login.NextPoll = G->GetWorld()->GetTimeSeconds() + G->Login.Device.Interval;
+		if (State == 1) G->LoginFinish(Account);
+		else if (State == 2) { G->LoginCancelWait(); G->Login.Message = Error; }
+	});
+}
+
+void AChickenGame::LoginActivate()
+{
+	if (Login.FormMode != 0)
+	{
+		FString Err;
+		const bool bOk = Login.FormMode == 2 ? Auth::Register(Login.Email, Login.Password, Err) : Auth::Login(Login.Email, Login.Password, Err);
+		if (!bOk) { Login.Message = Err; return; }
+		LoginFinish(Auth::Current());
+		return;
+	}
+	switch ((ELoginRow)Login.Row)
+	{
+	case ELoginRow::Google:
+	case ELoginRow::Microsoft:
+	{
+		const Auth::EProvider P = (ELoginRow)Login.Row == ELoginRow::Google ? Auth::EProvider::Google : Auth::EProvider::Microsoft;
+		Login.Message = TEXT("Łączenie…");
+		Login.Provider = (int32)P;
+		TWeakObjectPtr<AChickenGame> Weak(this);
+		Auth::RequestDeviceCode(P, [Weak](bool bOk, const Auth::FDeviceCode& Code, const FString& Error)
+		{
+			AChickenGame* G = Weak.Get();
+			if (!G || !G->Login.bOpen) return;
+			if (!bOk) { G->Login.Message = Error; return; }
+			G->Login.Device = Code;
+			G->Login.bWaiting = true;
+			G->Login.WaitStart = G->GetWorld()->GetTimeSeconds();
+			G->Login.NextPoll = G->Login.WaitStart + Code.Interval;
+			G->Login.Message.Reset();
+			FPlatformProcess::LaunchURL(*Code.VerificationUrl, nullptr, nullptr); // otwiera strone logowania dostawcy
+			G->GetWorldTimerManager().SetTimer(G->LoginTimer, FTimerDelegate::CreateWeakLambda(G, [G]() { G->LoginTick(); }), 1.f, true);
+		});
+		break;
+	}
+	case ELoginRow::EmailLogin: Login.FormMode = 1; Login.Field = 0; Login.Message.Reset(); break;
+	case ELoginRow::EmailRegister: Login.FormMode = 2; Login.Field = 0; Login.Message.Reset(); break;
+	case ELoginRow::Guest:
+	{
+		FAccount A;
+		A.Provider = TEXT("guest");
+		A.DisplayName = TEXT("Gość");
+		LoginFinish(A);
+		break;
+	}
+	default: break;
+	}
+}
+
+bool AChickenGame::LoginKey(const FKey& Key, bool bShift, bool bCtrl)
+{
+	if (!Login.bOpen) return false;
+	const FString Name = Key.GetFName().ToString();
+
+	if (Key == EKeys::Escape)
+	{
+		if (Login.bWaiting) { LoginCancelWait(); Login.Message = TEXT("Anulowano"); }
+		else if (Login.FormMode != 0) { Login.FormMode = 0; Login.Message.Reset(); }
+		else if (Auth::Current().IsLoggedIn()) Login = FLoginState(); // zamkniecie bez zmiany konta
+		return true;
+	}
+	if (Login.bWaiting) return true; // czekamy na przegladarke: tylko Esc
+
+	if (Login.FormMode == 0)
+	{
+		const int32 N = (int32)ELoginRow::Count;
+		if (Key == EKeys::Up) Login.Row = (Login.Row + N - 1) % N;
+		else if (Key == EKeys::Down) Login.Row = (Login.Row + 1) % N;
+		else if (Key == EKeys::Enter || Key == EKeys::SpaceBar) LoginActivate();
+		return true;
+	}
+
+	// Formularz e-mail: pole 0 = e-mail, 1 = haslo.
+	FString& Target = Login.Field == 0 ? Login.Email : Login.Password;
+	if (Key == EKeys::Tab || Key == EKeys::Up || Key == EKeys::Down) { Login.Field = 1 - Login.Field; return true; }
+	if (Key == EKeys::Enter)
+	{
+		if (Login.Field == 0) Login.Field = 1; else LoginActivate();
+		return true;
+	}
+	if (Key == EKeys::BackSpace) { if (Target.Len() > 0) Target.LeftChopInline(1, EAllowShrinking::No); return true; }
+	if (bCtrl && Key == EKeys::V)
+	{
+		FString Clip;
+		FPlatformApplicationMisc::ClipboardPaste(Clip);
+		Clip.TrimStartAndEndInline();
+		if (!Clip.Contains(TEXT("\n")) && Clip.Len() <= 80) Target = Clip;
+		return true;
+	}
+	if (Target.Len() >= 80) return true;
+	TCHAR Ch = 0;
+	if (Name.Len() == 1 && FChar::IsAlpha(Name[0])) Ch = bShift ? FChar::ToUpper(Name[0]) : FChar::ToLower(Name[0]);
+	else if (Name == TEXT("Zero")) Ch = TEXT('0');
+	else if (Name == TEXT("One")) Ch = TEXT('1');
+	else if (Name == TEXT("Two")) Ch = bShift ? TEXT('@') : TEXT('2');
+	else if (Name == TEXT("Three")) Ch = TEXT('3');
+	else if (Name == TEXT("Four")) Ch = TEXT('4');
+	else if (Name == TEXT("Five")) Ch = TEXT('5');
+	else if (Name == TEXT("Six")) Ch = TEXT('6');
+	else if (Name == TEXT("Seven")) Ch = TEXT('7');
+	else if (Name == TEXT("Eight")) Ch = TEXT('8');
+	else if (Name == TEXT("Nine")) Ch = TEXT('9');
+	else if (Name == TEXT("Period")) Ch = TEXT('.');
+	else if (Name == TEXT("Hyphen")) Ch = bShift ? TEXT('_') : TEXT('-');
+	else if (Name == TEXT("Underscore")) Ch = TEXT('_');
+	else if (Name == TEXT("Comma") && Login.Field == 1) Ch = TEXT(',');
+	if (Ch != 0) Target.AppendChar(Ch);
+	return true;
 }

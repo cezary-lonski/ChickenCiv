@@ -18,4 +18,6 @@ private:
 	void DrawBattle(const class AChickenGame* GM);
 	/** Menu glowne / pauzy. */
 	void DrawMenu(const class AChickenGame* GM);
+	/** Ekran logowania. */
+	void DrawLogin(const class AChickenGame* GM);
 };

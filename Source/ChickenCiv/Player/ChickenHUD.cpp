@@ -7,6 +7,7 @@
 #include "Core/ArmyRules.h"
 #include "Core/BattleRules.h"
 #include "Core/LlmStrategy.h"
+#include "Core/AccountAuth.h"
 #include "Player/BattleLayout.h"
 #include "Map/HexMapActor.h"
 #include "Map/WorldViewActor.h"
@@ -32,6 +33,79 @@ namespace
 			Y += H + 3.f;
 		}
 	};
+}
+
+void AChickenHUD::DrawLogin(const AChickenGame* GM)
+{
+	const FLoginState& L = GM->GetLogin();
+	if (!Canvas || !GEngine) return;
+	UFont* Font = GEngine->GetMediumFont();
+	const float W = (float)Canvas->SizeX, H = (float)Canvas->SizeY;
+	DrawRect(FLinearColor(0.03f, 0.04f, 0.07f, 0.98f), 0.f, 0.f, W, H);
+
+	float TW = 0.f, TH = 0.f;
+	Canvas->SetDrawColor(255, 205, 60);
+	Canvas->TextSize(Font, TEXT("CHICKEN CIV"), TW, TH, 3.2f, 3.2f);
+	Canvas->DrawText(Font, TEXT("CHICKEN CIV"), (W - TW) * 0.5f, 50.f, 3.2f, 3.2f);
+	Canvas->SetDrawColor(200, 200, 210);
+	Canvas->TextSize(Font, TEXT("Zaloguj się"), TW, TH, 1.5f, 1.5f);
+	Canvas->DrawText(Font, TEXT("Zaloguj się"), (W - TW) * 0.5f, 130.f, 1.5f, 1.5f);
+
+	const float X0 = W * 0.5f - 300.f;
+	float Y = 200.f;
+	if (L.bWaiting)
+	{
+		Canvas->SetDrawColor(255, 255, 255);
+		Canvas->DrawText(Font, FString::Printf(TEXT("Otwarto przeglądarkę: %s"), *L.Device.VerificationUrl), X0, Y, 1.2f, 1.2f);
+		Canvas->DrawText(Font, TEXT("Wpisz tam ten kod i potwierdź logowanie:"), X0, Y + 40.f, 1.2f, 1.2f);
+		Canvas->SetDrawColor(255, 230, 90);
+		Canvas->DrawText(Font, L.Device.UserCode, X0, Y + 90.f, 3.0f, 3.0f);
+		Canvas->SetDrawColor(160, 160, 170);
+		Canvas->DrawText(Font, TEXT("Esc: anuluj"), X0, Y + 190.f, 1.0f, 1.0f);
+	}
+	else if (L.FormMode != 0)
+	{
+		Canvas->SetDrawColor(255, 255, 255);
+		Canvas->DrawText(Font, L.FormMode == 2 ? TEXT("Nowe konto lokalne (e-mail + hasło)") : TEXT("Logowanie e-mail"), X0, Y, 1.3f, 1.3f);
+		const FString Masked = FString::ChrN(L.Password.Len(), TEXT('*'));
+		for (int32 f = 0; f < 2; ++f)
+		{
+			const bool bSel = L.Field == f;
+			if (bSel) DrawRect(FLinearColor(0.2f, 0.25f, 0.4f, 0.9f), X0 - 10.f, Y + 50.f + f * 50.f - 4.f, 640.f, 38.f);
+			Canvas->SetDrawColor(bSel ? FColor(255, 255, 255) : FColor(190, 190, 200));
+			Canvas->DrawText(Font, f == 0 ? TEXT("E-mail") : TEXT("Hasło"), X0, Y + 50.f + f * 50.f, 1.2f, 1.2f);
+			Canvas->SetDrawColor(255, 230, 120);
+			Canvas->DrawText(Font, (f == 0 ? L.Email : Masked) + (bSel ? TEXT("_") : TEXT("")), X0 + 160.f, Y + 50.f + f * 50.f, 1.2f, 1.2f);
+		}
+		Canvas->SetDrawColor(160, 160, 170);
+		Canvas->DrawText(Font, TEXT("Tab: pole   Enter: dalej / zatwierdź   Ctrl+V: wklej   Esc: wróć"), X0, Y + 170.f, 0.95f, 0.95f);
+	}
+	else
+	{
+		struct FRow { const TCHAR* Label; bool bAvailable; const TCHAR* Hint; };
+		const FRow Rows[] = {
+			{ TEXT("Zaloguj przez Google"), Auth::HasClientId(Auth::EProvider::Google), TEXT("brak GOOGLE_CLIENT_ID (README)") },
+			{ TEXT("Zaloguj przez Microsoft"), Auth::HasClientId(Auth::EProvider::Microsoft), TEXT("brak MICROSOFT_CLIENT_ID (README)") },
+			{ TEXT("Zaloguj e-mailem (konto lokalne)"), true, TEXT("") },
+			{ TEXT("Załóż konto e-mail (lokalne)"), true, TEXT("") },
+			{ TEXT("Graj jako gość"), true, TEXT("") },
+		};
+		for (int32 i = 0; i < UE_ARRAY_COUNT(Rows); ++i)
+		{
+			const bool bSel = L.Row == i;
+			if (bSel) DrawRect(FLinearColor(0.2f, 0.25f, 0.4f, 0.9f), X0 - 14.f, Y - 4.f, 640.f, 36.f);
+			Canvas->SetDrawColor(Rows[i].bAvailable ? (bSel ? FColor(255, 255, 255) : FColor(190, 190, 200)) : FColor(110, 110, 120));
+			Canvas->DrawText(Font, FString(bSel ? TEXT("> ") : TEXT("  ")) + Rows[i].Label + (Rows[i].bAvailable ? TEXT("") : *FString::Printf(TEXT("   (%s)"), Rows[i].Hint)), X0, Y, 1.2f, 1.2f);
+			Y += 40.f;
+		}
+		Canvas->SetDrawColor(160, 160, 170);
+		Canvas->DrawText(Font, TEXT("Góra/Dół: wybór   Enter: wykonaj"), X0, Y + 20.f, 0.95f, 0.95f);
+	}
+	if (!L.Message.IsEmpty())
+	{
+		Canvas->SetDrawColor(255, 160, 80);
+		Canvas->DrawText(Font, L.Message, X0, H - 90.f, 1.2f, 1.2f);
+	}
 }
 
 void AChickenHUD::DrawMenu(const AChickenGame* GM)
@@ -84,6 +158,10 @@ void AChickenHUD::DrawMenu(const AChickenGame* GM)
 		case EMenuRow::Color: Label = TEXT("Kolor kurczaka"); Value = CivColors::PaletteName(S.PlayerColorIndex); break;
 		case EMenuRow::Seed: Label = TEXT("Ziarno mapy"); Value = S.Seed == 0 ? FString(TEXT("losowe  (wpisz cyfry, Backspace kasuje)")) : FString::FromInt(S.Seed); break;
 		case EMenuRow::ApiKey: Label = TEXT("Klucz API LLM (AI)"); Value = LlmStrategy::HasApiKey() ? TEXT("ustawiony  (Enter/Ctrl+V: wklej nowy, Del: usuń)") : TEXT("brak – AI gra klasycznie  (Ctrl+V: wklej ze schowka)"); break;
+		case EMenuRow::Account:
+			Label = TEXT("Konto");
+			Value = Auth::Current().IsLoggedIn() ? FString::Printf(TEXT("%s (%s)  –  Enter: zmień konto"), *Auth::DisplayName(), *Auth::Current().Provider) : FString(TEXT("niezalogowany  –  Enter: zaloguj"));
+			break;
 		case EMenuRow::HostLan: Label = TEXT("Hostuj grę LAN"); Value = TEXT("Enter: otwórz poczekalnię (inni dołączają po adresie IP)"); break;
 		case EMenuRow::JoinAddress: Label = TEXT("Adres gospodarza"); Value = Menu.JoinAddress + (Menu.Row == i ? TEXT("_") : TEXT("")) + (Menu.Row == i ? TEXT("   (cyfry i kropka)") : TEXT("")); break;
 		case EMenuRow::JoinLan: Label = TEXT("Dołącz do gry LAN"); break;
@@ -252,6 +330,11 @@ void AChickenHUD::DrawHUD()
 		Canvas->SetDrawColor(200, 200, 200);
 		Canvas->TextSize(HF, Hint, TW, TH, 1.3f, 1.3f);
 		Canvas->DrawText(HF, Hint, (Canvas->SizeX - TW) * 0.5f, Canvas->SizeY * 0.4f + 70.f, 1.3f, 1.3f);
+		return;
+	}
+	if (GM && GM->IsLoginOpen())
+	{
+		DrawLogin(GM);
 		return;
 	}
 	if (GM && GM->IsMenuOpen())

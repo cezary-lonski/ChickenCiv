@@ -22,6 +22,7 @@ public:
 
 	virtual void SetupInputComponent() override;
 	virtual void BeginPlay() override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Miejsce gracza w grze LAN (nadawane przez serwer). */

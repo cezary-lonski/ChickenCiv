@@ -6,6 +6,7 @@
 #include "Model/CivState.h"
 #include "Core/BattleRules.h"
 #include "Core/ChickenCommand.h"
+#include "Core/AccountAuth.h"
 #include "ChickenGame.generated.h"
 
 class AHexMapActor;
@@ -18,7 +19,28 @@ class UMediaSoundComponent;
 class UTexture;
 
 /** Wiersze menu glownego / pauzy. */
-enum class EMenuRow : uint8 { Resume, NewGame, Size, Civs, Humans, Difficulty, Race, Color, Seed, ApiKey, HostLan, JoinAddress, JoinLan, Load, Save, Quit, Count };
+enum class EMenuRow : uint8 { Resume, NewGame, Size, Civs, Humans, Difficulty, Race, Color, Seed, ApiKey, Account, HostLan, JoinAddress, JoinLan, Load, Save, Quit, Count };
+
+/** Ekran logowania (przed menu). */
+enum class ELoginRow : uint8 { Google, Microsoft, EmailLogin, EmailRegister, Guest, Count };
+
+struct FLoginState
+{
+	bool bOpen = false;
+	int32 Row = 0;
+	int32 FormMode = 0;            // 0 lista, 1 logowanie e-mail, 2 rejestracja e-mail
+	int32 Field = 0;               // 0 e-mail, 1 haslo
+	FString Email;
+	FString Password;
+	FString Message;
+	// Logowanie przez przegladarke (device code)
+	bool bWaiting = false;
+	bool bPollInFlight = false;
+	int32 Provider = 0;            // Auth::EProvider
+	Auth::FDeviceCode Device;
+	double WaitStart = 0.0;
+	double NextPoll = 0.0;
+};
 
 struct FMenuState
 {
@@ -101,6 +123,13 @@ public:
 	// ---- Hot seat: ekran przekazania komputera ----
 	bool IsHandoff() const { return bHandoff; }
 	void DismissHandoff();
+
+	// ---- Logowanie ----
+	bool IsLoginOpen() const { return Login.bOpen; }
+	const FLoginState& GetLogin() const { return Login; }
+	void OpenLogin();
+	/** Obsluga klawisza na ekranie logowania (wpisywanie, nawigacja). Zawsze pochlania klawisz. */
+	bool LoginKey(const FKey& Key, bool bShift, bool bCtrl);
 
 	// ---- Intro (film przed menu) ----
 	bool IsIntro() const { return bIntro; }
@@ -186,6 +215,12 @@ private:
 	bool bClientProxy = false; // klient LAN: gra startuje dopiero na polecenie gospodarza
 	bool bLobbyRequested = false;
 
+	FLoginState Login;
+	FTimerHandle LoginTimer;
+	void LoginActivate();
+	void LoginFinish(const FAccount& Account);
+	void LoginCancelWait();
+	void LoginTick();
 	void StartIntro();
 	bool bIntro = false;
 	double IntroStartTime = 0.0;
