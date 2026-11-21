@@ -49,8 +49,11 @@ namespace
 	FLinearColor Darker(const FLinearColor& C, float T) { return FLinearColor(C.R * (1.f - T), C.G * (1.f - T), C.B * (1.f - T), 1.f); }
 
 	/** Podstawowy kurczak: korpus, glowa, dziob, grzebien, ogon, nogi, oczy. S = skala, Face = kierunek (+1 lub -1 po X). */
+	bool GSkipBody = false; // gdy true: rysuj tylko akcesoria (kurczak jest wtedy modelem 3D)
+
 	void AddChickenBody(FMeshBuilder& B, const FVector& P, float S, float Face, const FLinearColor& Col, bool bLegs = true)
 	{
+		if (GSkipBody) return;
 		const FLinearColor Head = Lighter(Col, 0.18f);
 		B.AddEllipsoid(P + FVector(0, 0, 22 * S), FVector(15 * S, 12 * S, 15 * S), Col);                 // korpus
 		B.AddSphere(P + FVector(11 * S * Face, 0, 39 * S), 8 * S, Head);                                   // glowa
@@ -662,6 +665,42 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 		AddResourceShape(B, Map.TileCenter(T.Coord) + FVector(-34.f, 28.f, 4.f), T.Resource);
 	}
 
+	// Teren: lasy, wzgorza i gory generowane proceduralnie.
+	for (const FMapTile& T : Grid.Tiles)
+	{
+		if (VisAt(T.Coord) == 0) continue;
+		if (T.Terrain != ETerrainType::Forest && T.Terrain != ETerrainType::Hills && T.Terrain != ETerrainType::Mountain) continue;
+		const FVector TC = Map.TileCenter(T.Coord);
+		const uint32 H = (uint32)(T.Coord.Q * 73856093) ^ (uint32)(T.Coord.R * 19349663);
+		auto Rnd = [&](int32 k) { return (float)((((H >> (k % 8)) + (uint32)k * 97u) * 2654435761u >> 8) & 255) / 255.f; };
+		if (T.Terrain == ETerrainType::Forest)
+		{
+			static const FVector2D Sp[6] = { FVector2D(-30, -12), FVector2D(-8, 30), FVector2D(24, 14), FVector2D(30, -26), FVector2D(-12, -34), FVector2D(2, 0) };
+			for (int32 k = 0; k < 6; ++k)
+			{
+				const float S = 0.8f + 0.5f * Rnd(k);
+				const FVector Base = TC + FVector(Sp[k].X + 6.f * Rnd(k + 1), Sp[k].Y, 0.f);
+				B.AddCylinder(Base, 2.6f * S, 12.f * S, Wood, 5);
+				B.AddCone(Base + FVector(0, 0, 8.f * S), FVector(0, 0, 1), 12.f * S, 24.f * S, FLinearColor(0.08f, 0.48f, 0.12f), 7);
+				B.AddCone(Base + FVector(0, 0, 20.f * S), FVector(0, 0, 1), 9.f * S, 20.f * S, FLinearColor(0.13f, 0.58f, 0.16f), 7);
+			}
+		}
+		else if (T.Terrain == ETerrainType::Hills)
+		{
+			B.AddEllipsoid(TC + FVector(-14, -8, 0), FVector(34, 28, 22), FLinearColor(0.4f, 0.62f, 0.2f), 4, 10);
+			B.AddEllipsoid(TC + FVector(22, 16, 0), FVector(24, 20, 14), FLinearColor(0.47f, 0.68f, 0.24f), 4, 9);
+			B.AddEllipsoid(TC + FVector(18, -26, 0), FVector(8, 6, 4), FLinearColor(0.55f, 0.55f, 0.55f), 3, 6);
+		}
+		else
+		{
+			const FLinearColor Rock(0.5f, 0.5f, 0.54f);
+			B.AddCone(TC + FVector(-10, 0, 0), FVector(0, 0, 1), 40.f, 90.f, Rock, 7);
+			B.AddCone(TC + FVector(-10, 0, 62), FVector(0, 0, 1), 14.f, 28.f, White, 7);        // snieg na szczycie
+			B.AddCone(TC + FVector(26, -14, 0), FVector(0, 0, 1), 26.f, 58.f, Darker(Rock, 0.2f), 6);
+			B.AddCone(TC + FVector(14, 26, 0), FVector(0, 0, 1), 22.f, 44.f, Lighter(Rock, 0.1f), 6);
+		}
+	}
+
 	// Ulepszenia pol (na odkrytych polach).
 	for (const FImprovement& I : GS.Civ.Improvements)
 	{
@@ -697,6 +736,19 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 			B.AddBar(CP + FVector(30, 30, 0), CP + FVector(30, 30, 70), 1.2f, Dark);                           // maszt z flaga
 			B.AddBox(CP + FVector(30, 40, 62), FVector(1, 10, 6), OwnerColor(C.Owner));
 			UpdateCityVisual(C, CP, OwnerColor(C.Owner));
+			if (C.Buildings.Contains(EBuildingType::SpaceStation))
+			{
+				const FVector SS = CP + FVector(55, 45, 85.f);                                          // stacja kosmiczna: pierscien + moduly
+				B.AddSphere(SS, 12.f, FLinearColor(0.75f, 0.78f, 0.85f), 5, 10);
+				B.AddCylinder(SS - FVector(0, 0, 4.f), 30.f, 3.f, FLinearColor(0.55f, 0.6f, 0.7f), 16);
+				B.AddBar(SS - FVector(30, 0, 0), SS + FVector(30, 0, 0), 2.f, Steel);
+				B.AddBar(SS - FVector(0, 30, 0), SS + FVector(0, 30, 0), 2.f, Steel);
+				B.AddBox(SS + FVector(32, 0, 0), FVector(4, 4, 6), FLinearColor(0.3f, 0.7f, 1.f));
+				B.AddBox(SS + FVector(-32, 0, 0), FVector(4, 4, 6), FLinearColor(0.3f, 0.7f, 1.f));
+				B.AddBox(SS + FVector(0, 32, 0), FVector(4, 4, 6), Gold);
+				B.AddBox(SS + FVector(0, -32, 0), FVector(4, 4, 6), Gold);
+				B.AddBar(SS, SS + FVector(0, 0, 22), 1.2f, Dark);
+			}
 			if (C.Buildings.Contains(EBuildingType::DeathStar))
 			{
 				const FVector DS = CP + FVector(0, 0, 175.f);                                           // Gwiazda Smierci nad miastem
@@ -738,7 +790,23 @@ void AWorldViewActor::Sync(const AChickenGameState& GS, const AHexMapActor& Map,
 			bUnitMoving = !D.Equals(Goal, 0.5);
 			P = D;
 		}
-		if (UsesModel(U.Type)) UpdateVisual(U, P + FVector(0, 0, 4.f), Goal - P, bUnitMoving, OwnerColor(U.Owner));
+		if (UsesModel(U.Type))
+		{
+			UpdateVisual(U, P + FVector(0, 0, 4.f), Goal - P, bUnitMoving, OwnerColor(U.Owner));
+			// Akcesoria (bron, helm, tarcza...) generowane proceduralnie, obrocone za kurczakiem.
+			const FUnitVisual* Vis2 = Visuals.Find(U.Id);
+			const FVector Org = P + FVector(0, 0, 4.f);
+			const int32 V0 = B.Verts.Num();
+			GSkipBody = true;
+			AddUnitShape(B, U, Org, OwnerColor(U.Owner));
+			GSkipBody = false;
+			const FRotator Rot(0.f, Vis2 ? Vis2->Yaw : 0.f, 0.f);
+			for (int32 vi = V0; vi < B.Verts.Num(); ++vi)
+			{
+				B.Verts[vi] = Org + Rot.RotateVector((B.Verts[vi] - Org) * 1.45f);
+				B.Normals[vi] = Rot.RotateVector(B.Normals[vi]);
+			}
+		}
 		else AddUnitShape(B, U, P + FVector(0, 0, 4.f), OwnerColor(U.Owner));
 		if (U.WorkTurns > 0) B.AddSphere(P + FVector(0, 0, 66.f), 4.f, Gold, 3, 6); // znacznik pracy
 		if (U.bCommander)
